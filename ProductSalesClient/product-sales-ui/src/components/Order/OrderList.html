@@ -1,0 +1,38 @@
+<div>
+  <el-card>
+    <el-form :inline="true" @submit.prevent="search" class="order-filter-form">
+      <el-form-item label="From">
+        <el-date-picker v-model="filters.fromDate" type="date" placeholder="Start" />
+      </el-form-item>
+      <el-form-item label="To">
+        <el-date-picker v-model="filters.toDate" type="date" placeholder="End" />
+      </el-form-item>
+      <el-form-item label="Customer">
+        <el-input v-model="filters.customerName" placeholder="Name" />
+      </el-form-item>
+      <el-form-item label="Products">
+        <el-select v-model="filters.productIDs" multiple filterable placeholder="Select products">
+          <el-option v-for="p in products" :key="p.productID" :label="p.name" :value="p.productID" />
+        </el-select>
+      </el-form-item>
+      <el-form-item>
+        <el-button type="primary" @click="search">Filter</el-button>
+      </el-form-item>
+    </el-form>
+  </el-card>
+
+  <el-table :data="orders" style="width: 100%; margin-top: 20px;">
+    <el-table-column prop="orderID" label="Order #" width="100" />
+    <el-table-column prop="customerName" label="Customer" />
+    <el-table-column prop="orderDate" label="Date" :formatter="formatDate" />
+    <el-table-column label="Items">
+      <template #default="scope">
+        <ul>
+          <li v-for="item in scope.row.items" :key="item.orderItemID">
+            {{ item.product?.name }} — {{ item.quantity }} × {{ item.unitPrice }}$
+          </li>
+        </ul>
+      </template>
+    </el-table-column>
+  </el-table>
+</div>

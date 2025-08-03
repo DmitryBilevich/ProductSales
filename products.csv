@@ -1,0 +1,7 @@
+ProductCode,Name,Category,Price,QuantityInStock,Description
+SKU001,USB Keyboard,Electronics,25.99,100,Compact USB keyboard
+SKU002,Wireless Mouse,Electronics,19.99,80,Ergonomic wireless mouse
+SKU003,Laptop Stand,Accessories,39.50,40,Adjustable aluminum stand
+SKU004,Desk Mat,Furniture,12.99,150,Felt desk mat
+SKU005,Monitor 24inch,Electronics,145.00,30,Full HD LED monitor
+SKU006,Monitor 25inch,Electronics,185.00,14,Full HD LED monitor
