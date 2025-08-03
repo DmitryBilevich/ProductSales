@@ -1,7 +1,11 @@
 ﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using ProductSalesApi.Data;
+using ProductSalesApi.Dtos;
 using ProductSalesApi.Models;
+using System.Data;
 
 namespace ProductSalesApi.Controllers;
 
@@ -67,4 +71,48 @@ public class ProductsController : ControllerBase
         await _context.SaveChangesAsync();
         return NoContent();
     }
+
+    [HttpPost("search")]
+    public async Task<ActionResult<PagedResult<ProductResultDto>>> Search([FromBody] ProductFilterDto filter)
+    {
+        var result = new PagedResult<ProductResultDto>();
+        var connectionString = _context.Database.GetConnectionString();
+
+        using var connection = new SqlConnection(connectionString);
+        await connection.OpenAsync();
+
+        using var command = new SqlCommand("SearchProducts", connection)
+        {
+            CommandType = CommandType.StoredProcedure
+        };
+
+        command.Parameters.AddWithValue("@Name", (object?)filter.Name ?? DBNull.Value);
+        command.Parameters.AddWithValue("@Category", (object?)filter.Category ?? DBNull.Value);
+        command.Parameters.AddWithValue("@PageNumber", filter.PageNumber);
+        command.Parameters.AddWithValue("@PageSize", filter.PageSize);
+
+        using var reader = await command.ExecuteReaderAsync();
+
+        while (await reader.ReadAsync())
+        {
+            result.Items.Add(new ProductResultDto
+            {
+                ProductID = reader.GetInt32(0),
+                Name = reader.GetString(1),
+                Category = reader.IsDBNull(2) ? null : reader.GetString(2),
+                Price = reader.GetDecimal(3),
+                QuantityInStock = reader.GetInt32(4),
+                Description = reader.IsDBNull(5) ? null : reader.GetString(5)
+            });
+        }
+
+        if (await reader.NextResultAsync() && await reader.ReadAsync())
+        {
+            result.TotalCount = reader.GetInt32(0);
+        }
+
+        return Ok(result);
+    }
+
+
 }
