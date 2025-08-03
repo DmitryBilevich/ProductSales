@@ -11,8 +11,18 @@
         <el-input v-model="filters.customerName" placeholder="Name" />
       </el-form-item>
       <el-form-item label="Products">
-        <el-select v-model="filters.productIDs" multiple filterable placeholder="Select products">
-          <el-option v-for="p in products" :key="p.productID" :label="p.name" :value="p.productID" />
+        <el-select
+          v-model="filters.productIDs"
+          multiple
+          filterable
+          placeholder="Select products"
+        >
+          <el-option
+            v-for="p in products"
+            :key="p.productID"
+            :label="p.name"
+            :value="p.productID"
+          />
         </el-select>
       </el-form-item>
       <el-form-item>
@@ -27,9 +37,9 @@
     <el-table-column prop="orderDate" label="Date" :formatter="formatDate" />
     <el-table-column label="Items">
       <template #default="scope">
-        <ul>
+        <ul style="margin: 0; padding-left: 1rem;">
           <li v-for="item in scope.row.items" :key="item.orderItemID">
-            {{ item.product?.name }} — {{ item.quantity }} × {{ item.unitPrice }}$
+            {{ item.productName }} — {{ item.quantity }} × {{ item.unitPrice.toFixed(2) }}$
           </li>
         </ul>
       </template>
