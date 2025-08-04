@@ -26,7 +26,7 @@
         <div class="view-options">
           <h3 class="view-title">View Mode</h3>
           <SelectButton 
-            v-model="currentView" 
+            v-model="selectedView" 
             :options="viewOptions" 
             optionLabel="label"
             optionValue="value"
@@ -207,20 +207,340 @@
           @click="search"
           class="p-button-primary"
         />
+        <Button
+          label="Reset"
+          icon="pi pi-refresh"
+          @click="clearFilters"
+          class="p-button-outlined"
+        />
       </div>
     </template>
   </Card>
 
+  <!-- Tree View -->
+  <div v-if="currentView === 'tree'" class="tree-view-container">
+    <div class="tree-layout">
+      <!-- Left Side: Category Tree -->
+      <Card class="tree-panel">
+        <template #title>
+          <div class="tree-header">
+            <i class="pi pi-sitemap mr-2"></i>
+            <span>Product Categories</span>
+          </div>
+        </template>
+        
+        <template #content>
+          <div class="tree-controls mb-3">
+            <Button
+              label="Expand All"
+              icon="pi pi-plus"
+              @click="expandAll"
+              class="p-button-text p-button-sm mr-2"
+            />
+            <Button
+              label="Collapse All"
+              icon="pi pi-minus"
+              @click="collapseAll"
+              class="p-button-text p-button-sm"
+            />
+          </div>
+          
+          <Tree
+            :value="treeNodes"
+            :expandedKeys="expandedKeys"
+            :selectionKeys="selectedKeys"
+            selectionMode="single"
+            @node-select="onNodeSelect"
+            @node-unselect="onNodeUnselect"
+            @node-expand="onNodeExpand"
+            @node-collapse="onNodeCollapse"
+            class="category-tree"
+          >
+            <template #default="slotProps">
+              <div class="tree-node-content">
+                <span class="node-label">{{ slotProps.node.label }}</span>
+                <Tag 
+                  v-if="slotProps.node.count !== undefined" 
+                  :value="slotProps.node.count" 
+                  class="node-count"
+                  severity="info"
+                />
+              </div>
+            </template>
+          </Tree>
+        </template>
+      </Card>
+      
+      <!-- Right Side: Product Form/Details -->
+      <Card class="form-panel">
+        <template #title>
+          <div class="form-header">
+            <i class="pi pi-box mr-2"></i>
+            <span v-if="selectedProduct">{{ selectedProduct.name || 'Edit Product' }}</span>
+            <span v-else-if="selectedCategory">Products in {{ selectedCategory }}</span>
+            <span v-else>Select a category or product</span>
+          </div>
+        </template>
+        
+        <template #content>
+          <!-- Product Form (when editing) -->
+          <div v-if="selectedProduct" class="tree-product-form">
+            <div class="form-actions mb-4">
+              <Button
+                label="Save Changes"
+                icon="pi pi-save"
+                @click="saveTreeProduct"
+                class="p-button-success mr-2"
+                :loading="saving"
+              />
+              <Button
+                label="Cancel"
+                icon="pi pi-times"
+                @click="cancelTreeEdit"
+                class="p-button-outlined"
+              />
+              <Button
+                label="Delete"
+                icon="pi pi-trash"
+                @click="confirmDelete(selectedProduct)"
+                class="p-button-danger p-button-outlined ml-auto"
+              />
+            </div>
+            
+            <!-- Product Form Fields -->
+            <div class="tree-form-grid">
+              <div class="form-row">
+                <div class="form-group">
+                  <label class="form-label">SKU</label>
+                  <InputText v-model="treeForm.sku" disabled class="form-input" />
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Category</label>
+                  <Dropdown
+                    v-model="treeForm.category"
+                    :options="categoryOptions"
+                    placeholder="Select category"
+                    class="form-input"
+                    showClear
+                    editable
+                  />
+                </div>
+              </div>
+              
+              <div class="form-row">
+                <div class="form-group full-width">
+                  <label class="form-label">Product Name</label>
+                  <InputText v-model="treeForm.name" placeholder="Enter product name" class="form-input" />
+                </div>
+              </div>
+              
+              <div class="form-row">
+                <div class="form-group">
+                  <label class="form-label">Price</label>
+                  <InputNumber
+                    v-model="treeForm.price"
+                    :min="0"
+                    :maxFractionDigits="2"
+                    mode="currency"
+                    currency="USD"
+                    class="form-input"
+                  />
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Stock</label>
+                  <InputNumber
+                    v-model="treeForm.quantityInStock"
+                    :min="0"
+                    class="form-input"
+                  />
+                </div>
+              </div>
+              
+              <div class="form-row">
+                <div class="form-group full-width">
+                  <label class="form-label">Description</label>
+                  <Textarea
+                    v-model="treeForm.description"
+                    placeholder="Enter product description..."
+                    :rows="4"
+                    class="form-input"
+                  />
+                </div>
+              </div>
+              
+              <!-- Image Management -->
+              <div class="form-row">
+                <div class="form-group full-width">
+                  <label class="form-label">Product Images</label>
+                  <div class="tree-image-management">
+                    <div v-if="treeForm.images?.length" class="image-gallery-tree">
+                      <div
+                        v-for="(image, index) in treeForm.images"
+                        :key="image.imageID"
+                        class="image-item-tree"
+                      >
+                        <img :src="image.imageUrl" :alt="`Image ${index + 1}`" class="tree-thumbnail" />
+                        <div class="image-controls-tree">
+                          <Button
+                            icon="pi pi-arrow-up"
+                            class="p-button-text p-button-sm"
+                            @click="moveTreeImageUp(index)"
+                            :disabled="index === 0"
+                            title="Move Up"
+                          />
+                          <Button
+                            icon="pi pi-arrow-down"
+                            class="p-button-text p-button-sm"
+                            @click="moveTreeImageDown(index)"
+                            :disabled="index === treeForm.images.length - 1"
+                            title="Move Down"
+                          />
+                          <Button
+                            icon="pi pi-times"
+                            class="p-button-text p-button-sm p-button-danger"
+                            @click="removeTreeImage(index)"
+                            title="Remove"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                    
+                    <div class="add-image-tree">
+                      <input
+                        type="file"
+                        accept="image/*"
+                        @change="addTreeImage"
+                        style="display: none"
+                        id="treeFileInput"
+                      />
+                      <Button
+                        label="Add Image"
+                        icon="pi pi-plus"
+                        @click="openTreeFileDialog"
+                        class="p-button-outlined"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Category Products List (when category selected) -->
+          <div v-else-if="selectedCategory && categoryProducts.length" class="category-products">
+            <div class="category-actions mb-4">
+              <Button
+                label="Add New Product"
+                icon="pi pi-plus"
+                @click="addProductToCategory"
+                class="p-button-success"
+              />
+            </div>
+            
+            <DataTable
+              :value="categoryProducts"
+              responsiveLayout="scroll"
+              class="category-products-table"
+            >
+              <Column header="Image" style="width: 80px">
+                <template #body="slotProps">
+                  <div class="mini-image-cell">
+                    <img
+                      v-if="slotProps.data.images?.length"
+                      :src="slotProps.data.images[0].imageUrl"
+                      :alt="slotProps.data.name"
+                      class="mini-image"
+                    />
+                    <div v-else class="no-image-mini">
+                      <i class="pi pi-image"></i>
+                    </div>
+                  </div>
+                </template>
+              </Column>
+              
+              <Column field="name" header="Name" sortable>
+                <template #body="slotProps">
+                  <div class="clickable-name" @click="selectProduct(slotProps.data)">
+                    <span class="product-name-link">{{ slotProps.data.name }}</span>
+                    <small v-if="slotProps.data.description" class="product-desc-mini">
+                      {{ slotProps.data.description.substring(0, 50) }}...
+                    </small>
+                  </div>
+                </template>
+              </Column>
+              
+              <Column field="price" header="Price" sortable>
+                <template #body="slotProps">
+                  <span class="price-text">${{ Number(slotProps.data.price).toFixed(2) }}</span>
+                </template>
+              </Column>
+              
+              <Column field="quantityInStock" header="Stock" sortable>
+                <template #body="slotProps">
+                  <Tag
+                    :value="slotProps.data.quantityInStock"
+                    :severity="getStockSeverity(slotProps.data.quantityInStock)"
+                  />
+                </template>
+              </Column>
+            </DataTable>
+          </div>
+          
+          <!-- Empty State -->
+          <div v-else class="empty-state">
+            <div class="empty-content">
+              <i class="pi pi-box empty-icon"></i>
+              <h3>No Selection</h3>
+              <p v-if="!selectedCategory">Select a category from the tree to view products, or click on a specific product to edit it.</p>
+              <p v-else>This category has no products yet.</p>
+              <Button
+                v-if="selectedCategory"
+                label="Add First Product"
+                icon="pi pi-plus"
+                @click="addProductToCategory"
+                class="p-button-success mt-3"
+              />
+            </div>
+          </div>
+        </template>
+      </Card>
+    </div>
+  </div>
+
   <!-- Products Table -->
-  <Card class="products-table-card">
+  <Card v-if="currentView !== 'tree'" class="products-table-card">
     <template #title>
       <div class="table-header">
         <div class="table-info">
           <span class="table-title">Products</span>
           <Tag v-if="totalCount" :value="`${totalCount} items`" class="ml-2" />
+          <Tag v-if="currentView === 'inline' && hasUnsavedChanges" 
+               value="Unsaved Changes" 
+               severity="warning" 
+               class="ml-2" />
         </div>
         
         <div class="table-controls">
+          <!-- Inline Edit Controls -->
+          <div v-if="currentView === 'inline'" class="inline-edit-controls">
+            <Button
+              label="Save All"
+              icon="pi pi-check"
+              @click="saveAllChanges"
+              class="p-button-success p-button-sm"
+              :disabled="!hasUnsavedChanges"
+              :loading="bulkSaving"
+            />
+            <Button
+              label="Discard"
+              icon="pi pi-times"
+              @click="discardAllChanges"
+              class="p-button-danger p-button-outlined p-button-sm"
+              :disabled="!hasUnsavedChanges"
+            />
+          </div>
+          
+          <!-- Regular Controls -->
           <Dropdown
             v-model="filters.pageSize"
             :options="pageSizeOptions"
@@ -262,30 +582,89 @@
         :globalFilterFields="['name', 'category', 'sku']"
         paginatorTemplate="FirstPageLink PrevPageLink PageLinks NextPageLink LastPageLink CurrentPageReport RowsPerPageDropdown"
         currentPageReportTemplate="Showing {first} to {last} of {totalRecords} products"
+        :rowClass="getRowClass"
       >
-        <Column header="Image" style="width: 100px" :exportable="false">
+        <Column header="Images" style="width: 120px" :exportable="false">
           <template #body="slotProps">
             <div class="product-image-cell">
-              <div 
-                v-if="slotProps.data.images?.length" 
-                @click="openGallery(slotProps.data)" 
-                class="image-thumbnail-container"
-              >
-                <img
-                  :src="slotProps.data.images[0].imageUrl"
-                  :alt="slotProps.data.name"
-                  class="image-thumbnail"
-                />
-                <div 
-                  v-if="slotProps.data.images.length > 1" 
-                  class="image-count-badge"
-                >
-                  +{{ slotProps.data.images.length - 1 }}
+              <!-- Inline Edit Mode -->
+              <div v-if="currentView === 'inline' && isProductEditing(slotProps.data.productID)" class="inline-image-edit">
+                <div class="image-management-inline">
+                  <!-- Existing Images -->
+                  <div v-if="editingProducts[slotProps.data.productID]?.images?.length" class="existing-images">
+                    <div 
+                      v-for="(image, index) in editingProducts[slotProps.data.productID].images" 
+                      :key="image.imageID"
+                      class="image-item"
+                    >
+                      <img :src="image.imageUrl" :alt="`Image ${index + 1}`" class="mini-thumbnail" />
+                      <div class="image-controls">
+                        <Button 
+                          icon="pi pi-arrow-up" 
+                          class="p-button-text p-button-sm mini-btn"
+                          @click="moveImageUp(slotProps.data.productID, index)"
+                          :disabled="index === 0"
+                          title="Move Up"
+                        />
+                        <Button 
+                          icon="pi pi-arrow-down" 
+                          class="p-button-text p-button-sm mini-btn"
+                          @click="moveImageDown(slotProps.data.productID, index)"
+                          :disabled="index === editingProducts[slotProps.data.productID].images.length - 1"
+                          title="Move Down"
+                        />
+                        <Button 
+                          icon="pi pi-times" 
+                          class="p-button-text p-button-sm p-button-danger mini-btn"
+                          @click="removeImage(slotProps.data.productID, index)"
+                          title="Remove"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <!-- Add New Image Button -->
+                  <div class="add-image-section">
+                    <input 
+                      type="file" 
+                      accept="image/*" 
+                      @change="addImageToProduct(slotProps.data.productID, $event)"
+                      style="display: none"
+                      :id="`fileInput-${slotProps.data.productID}`"
+                    />
+                    <Button 
+                      icon="pi pi-plus" 
+                      label="Add Image"
+                      class="p-button-outlined p-button-sm"
+                      @click="openFileDialog(slotProps.data.productID)"
+                    />
+                  </div>
                 </div>
               </div>
-              <div v-else class="no-image-placeholder">
-                <i class="pi pi-image"></i>
-                <span>No image</span>
+              
+              <!-- Regular View Mode -->
+              <div v-else>
+                <div 
+                  v-if="slotProps.data.images?.length" 
+                  @click="openGallery(slotProps.data)" 
+                  class="image-thumbnail-container"
+                >
+                  <img
+                    :src="slotProps.data.images[0].imageUrl"
+                    :alt="slotProps.data.name"
+                    class="image-thumbnail"
+                  />
+                  <div 
+                    v-if="slotProps.data.images.length > 1" 
+                    class="image-count-badge"
+                  >
+                    +{{ slotProps.data.images.length - 1 }}
+                  </div>
+                </div>
+                <div v-else class="no-image-placeholder">
+                  <i class="pi pi-image"></i>
+                  <span>No image</span>
+                </div>
               </div>
             </div>
           </template>
@@ -299,7 +678,30 @@
 
         <Column field="name" header="Name" sortable style="min-width: 200px">
           <template #body="slotProps">
-            <div class="product-name-cell">
+            <div v-if="currentView === 'inline' && isProductEditing(slotProps.data.productID)" class="inline-edit-cell">
+              <div class="name-input-container">
+                <InputText
+                  v-model="editingProducts[slotProps.data.productID].name"
+                  placeholder="Product name"
+                  class="inline-input"
+                  @input="hasUnsavedChanges = true"
+                  :disabled="editingProducts[slotProps.data.productID]?.saving"
+                />
+                <div v-if="editingProducts[slotProps.data.productID]?.saving" class="saving-indicator">
+                  <i class="pi pi-spin pi-spinner"></i>
+                  <small>Saving...</small>
+                </div>
+              </div>
+              <Textarea
+                v-model="editingProducts[slotProps.data.productID].description"
+                placeholder="Description"
+                :rows="2"
+                class="inline-input mt-1"
+                @input="hasUnsavedChanges = true"
+                :disabled="editingProducts[slotProps.data.productID]?.saving"
+              />
+            </div>
+            <div v-else class="product-name-cell">
               <span class="product-name">{{ slotProps.data.name }}</span>
               <small v-if="slotProps.data.description" class="product-description">
                 {{ slotProps.data.description }}
@@ -310,19 +712,56 @@
 
         <Column field="category" header="Category" sortable style="min-width: 120px">
           <template #body="slotProps">
-            <Tag :value="slotProps.data.category" class="category-tag" />
+            <div v-if="currentView === 'inline' && isProductEditing(slotProps.data.productID)" class="inline-edit-cell">
+              <Dropdown
+                v-model="editingProducts[slotProps.data.productID].category"
+                :options="categoryOptions"
+                placeholder="Select category"
+                class="inline-input"
+                showClear
+                editable
+                @change="hasUnsavedChanges = true"
+                :disabled="editingProducts[slotProps.data.productID]?.saving"
+              />
+            </div>
+            <div v-else>
+              <Tag :value="slotProps.data.category" class="category-tag" />
+            </div>
           </template>
         </Column>
 
         <Column field="price" header="Price" sortable style="min-width: 100px">
           <template #body="slotProps">
-            <span class="price-text">${{ Number(slotProps.data.price).toFixed(2) }}</span>
+            <div v-if="currentView === 'inline' && isProductEditing(slotProps.data.productID)" class="inline-edit-cell">
+              <InputNumber
+                v-model="editingProducts[slotProps.data.productID].price"
+                :min="0"
+                :maxFractionDigits="2"
+                mode="currency"
+                currency="USD"
+                class="inline-input"
+                @input="hasUnsavedChanges = true"
+                :disabled="editingProducts[slotProps.data.productID]?.saving"
+              />
+            </div>
+            <div v-else>
+              <span class="price-text">${{ Number(slotProps.data.price).toFixed(2) }}</span>
+            </div>
           </template>
         </Column>
 
         <Column field="quantityInStock" header="Stock" sortable style="min-width: 100px">
           <template #body="slotProps">
-            <div class="stock-cell">
+            <div v-if="currentView === 'inline' && isProductEditing(slotProps.data.productID)" class="inline-edit-cell">
+              <InputNumber
+                v-model="editingProducts[slotProps.data.productID].quantityInStock"
+                :min="0"
+                class="inline-input"
+                @input="hasUnsavedChanges = true"
+                :disabled="editingProducts[slotProps.data.productID]?.saving"
+              />
+            </div>
+            <div v-else class="stock-cell">
               <Tag 
                 :value="slotProps.data.quantityInStock" 
                 :severity="getStockSeverity(slotProps.data.quantityInStock)"
@@ -333,27 +772,64 @@
           </template>
         </Column>
 
-        <Column header="Actions" style="width: 120px" :exportable="false">
+        <Column header="Actions" style="width: 160px" :exportable="false">
           <template #body="slotProps">
             <div class="action-buttons">
-              <Button 
-                icon="pi pi-eye" 
-                class="p-button-rounded p-button-text p-button-sm action-btn"
-                @click="viewProduct(slotProps.data)"
-                title="View"
-              />
-              <Button 
-                icon="pi pi-pencil" 
-                class="p-button-rounded p-button-text p-button-sm action-btn" 
-                @click="editProduct(slotProps.data)"
-                title="Edit"
-              />
-              <Button 
-                icon="pi pi-trash" 
-                class="p-button-rounded p-button-text p-button-sm p-button-danger action-btn" 
-                @click="confirmDelete(slotProps.data)"
-                title="Delete"
-              />
+              <!-- Inline Edit Mode Actions -->
+              <template v-if="currentView === 'inline'">
+                <template v-if="isProductEditing(slotProps.data.productID)">
+                  <Button 
+                    icon="pi pi-save" 
+                    class="p-button-text p-button-sm action-btn"
+                    @click="saveIndividualProduct(slotProps.data.productID)"
+                    title="Save Product"
+                    :loading="editingProducts[slotProps.data.productID]?.saving"
+                  />
+                  <Button 
+                    icon="pi pi-times" 
+                    class="p-button-rounded p-button-text p-button-sm p-button-danger action-btn"
+                    @click="cancelInlineEdit(slotProps.data.productID)"
+                    title="Cancel Edit"
+                    :disabled="editingProducts[slotProps.data.productID]?.saving"
+                  />
+                </template>
+                <template v-else>
+                  <Button 
+                    icon="pi pi-pencil" 
+                    class="p-button-rounded p-button-text p-button-sm action-btn" 
+                    @click="startInlineEdit(slotProps.data)"
+                    title="Edit Inline"
+                  />
+                  <Button 
+                    icon="pi pi-trash" 
+                    class="p-button-rounded p-button-text p-button-sm p-button-danger action-btn" 
+                    @click="confirmDelete(slotProps.data)"
+                    title="Delete"
+                  />
+                </template>
+              </template>
+              
+              <!-- Regular Table Mode Actions -->
+              <template v-else>
+                <Button 
+                  icon="pi pi-eye" 
+                  class="p-button-rounded p-button-text p-button-sm action-btn"
+                  @click="viewProduct(slotProps.data)"
+                  title="View"
+                />
+                <Button 
+                  icon="pi pi-pencil" 
+                  class="p-button-rounded p-button-text p-button-sm action-btn" 
+                  @click="editProduct(slotProps.data)"
+                  title="Edit"
+                />
+                <Button 
+                  icon="pi pi-trash" 
+                  class="p-button-rounded p-button-text p-button-sm p-button-danger action-btn" 
+                  @click="confirmDelete(slotProps.data)"
+                  title="Delete"
+                />
+              </template>
             </div>
           </template>
         </Column>
