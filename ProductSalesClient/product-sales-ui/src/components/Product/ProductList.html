@@ -1,38 +1,155 @@
 <div>
-  <el-card>
-    <el-form :inline="true" @submit.prevent="search" class="product-filter-form">
-      <el-form-item label="Name">
-        <el-input v-model="filters.name" placeholder="Product name" />
-      </el-form-item>
-      <el-form-item label="Category">
-        <el-input v-model="filters.category" placeholder="Category" />
-      </el-form-item>
-      <el-form-item>
-        <el-button type="primary" @click="search">Search</el-button>
-      </el-form-item>
-    </el-form>
-  </el-card>
-
-  <el-table
-    :data="products"
-    style="width: 100%; margin-top: 20px;"
-    border
-    :loading="loading"
-  >
-    <el-table-column prop="name" label="Name" />
-    <el-table-column prop="category" label="Category" />
-    <el-table-column prop="price" label="Price" width="100" />
-    <el-table-column prop="quantityInStock" label="In Stock" width="100" />
-  </el-table>
-
-  <div class="pagination">
-    <el-pagination
-      background
-      layout="prev, pager, next"
-      :current-page="filters.pageNumber"
-      :page-size="filters.pageSize"
-      :total="totalCount"
-      @current-change="changePage"
-    />
+  <div class="card">
+    <div class="p-fluid p-formgrid p-grid">
+      <div class="p-field p-col-4">
+        <label for="name">Name</label>
+        <InputText id="name" v-model="filters.name" placeholder="Product name" />
+      </div>
+      <div class="p-field p-col-4">
+        <label for="category">Category</label>
+        <InputText id="category" v-model="filters.category" placeholder="Category" />
+      </div>
+      <div class="p-field p-col-4 p-d-flex p-ai-end">
+        <Button label="Search" icon="pi pi-search" class="p-button-sm" @click="search" />
+      </div>
+    </div>
   </div>
+
+  <Button
+  label="Add Product"
+  icon="pi pi-plus"
+  class="p-button-sm p-button-success"
+  @click="addProduct"
+/>
+  <DataTable
+    :value="products"
+    :lazy="true"
+    :paginator="true"
+    :rows="filters.pageSize"
+    :totalRecords="totalCount"
+    :first="(filters.pageNumber - 1) * filters.pageSize"
+    :loading="loading"
+    @page="onPage"
+    responsiveLayout="scroll"
+    :sortField="filters.sortField"
+    :sortOrder="filters.sortOrder"
+    @sort="onSort"
+  >
+<Column header="Images" style="width: 120px">
+  <template #body="slotProps">
+    <div v-if="slotProps.data.images?.length" @click="openGallery(slotProps.data)" style="cursor: pointer">
+      <img
+        :src="slotProps.data.images[0].imageUrl"
+        alt="thumbnail"
+        style="width: 60px; height: 45px; object-fit: contain; border-radius: 4px"
+      />
+      <span v-if="slotProps.data.images.length > 1" style="font-size: 10px; display: block;">
+        +{{ slotProps.data.images.length - 1 }} more
+      </span>
+    </div>
+    <span v-else>No images</span>
+  </template>
+</Column>
+    <Column field="name" header="Name" sortable></Column>
+    <Column field="category" header="Category" sortable></Column>
+    <Column field="price" header="Price" sortable></Column>
+    <Column field="quantityInStock" header="In Stock" sortable></Column>
+    <Column header="Actions" style="width: 120px">
+  <template #body="slotProps">
+    <Button icon="pi pi-pencil" class="p-button-text p-button-sm" @click="editProduct(slotProps.data)" />
+    <Button icon="pi pi-trash" class="p-button-text p-button-sm p-button-danger" @click="confirmDelete(slotProps.data)" />
+  </template>
+</Column>
+  </DataTable>
 </div>
+<Dialog
+  v-model:visible="showGalleryDialog"
+  modal
+  header="Image Gallery"
+  :style="{ width: '80vw' }"
+  :breakpoints="{ '960px': '95vw', '640px': '100vw' }"
+>
+  <h3 style="margin-bottom: 0.5rem">{{ galleryTitle }}</h3>
+  <Galleria
+    :value="galleryImages"
+    :numVisible="5"
+    :showThumbnails="true"
+    :showIndicators="true"
+    :circular="true"
+    :autoPlay="false"
+    containerStyle="max-width: 100%"
+  >
+    <template #item="slotProps">
+      <img
+        :src="slotProps.item.imageUrl"
+        :alt="'Image ' + slotProps.item.imageID"
+        style="width: 100%; max-height: 70vh; object-fit: contain"
+      />
+    </template>
+    <template #thumbnail="slotProps">
+      <img
+        :src="slotProps.item.imageUrl"
+        style="width: 60px; height: 40px; object-fit: cover"
+      />
+    </template>
+  </Galleria>
+</Dialog>
+<Dialog
+  v-model:visible="showFormDialog"
+  modal
+  :header="isEditMode ? 'Edit Product' : 'Add Product'"
+  :style="{ width: '600px' }"
+>
+  <TabView>
+    <TabPanel header="Product Info">
+      <div class="p-fluid">
+        <div class="p-field">
+          <label for="sku">SKU</label>
+          <InputText
+            v-model="productForm.sku"
+            :disabled="isEditMode"
+            placeholder="Auto-reserved from server"
+          />
+          <small v-if="skuError" class="p-error">This SKU already exists</small>
+        </div>
+        <div class="p-field">
+          <label for="name">Name</label>
+          <InputText v-model="productForm.name" />
+        </div>
+        <div class="p-field">
+          <label for="category">Category</label>
+          <InputText v-model="productForm.category" />
+        </div>
+        <div class="p-field">
+          <label for="price">Price</label>
+          <InputText v-model.number="productForm.price" />
+        </div>
+        <div class="p-field">
+          <label for="quantity">In Stock</label>
+          <InputText v-model.number="productForm.quantityInStock" />
+        </div>
+        <div class="p-field">
+          <label for="description">Description</label>
+          <InputText v-model="productForm.description" />
+        </div>
+      </div>
+    </TabPanel>
+
+<TabPanel header="Images">
+  <ProductImageManager
+    v-if="isEditMode"
+    :productId="productForm.productID"
+  />
+  <ImageUploader
+    v-else
+    @update="imageFiles = $event"
+  />
+</TabPanel>
+  </TabView>
+
+  <template #footer>
+    <Button label="Cancel" icon="pi pi-times" @click="showFormDialog = false" class="p-button-text" />
+    <Button label="Save" icon="pi pi-check" @click="saveProduct" />
+  </template>
+</Dialog>
+

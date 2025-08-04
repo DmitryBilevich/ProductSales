@@ -1,7 +1,20 @@
-.product-filter-form {
+.card {
   margin-bottom: 1rem;
+  padding: 1rem;
+  background: #f9f9f9;
 }
-.pagination {
-  margin-top: 1rem;
-  text-align: right;
+
+.image-scroll-container {
+  display: flex;
+  overflow-x: auto;
+  max-width: 250px;
+  gap: 4px;
+  padding: 4px 0;
+}
+
+.image-thumb {
+  width: 50px;
+  height: auto;
+  border-radius: 4px;
+  object-fit: contain;
 }
