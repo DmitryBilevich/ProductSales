@@ -1,6 +1,5 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.SqlClient;
-using Microsoft.Extensions.Configuration;
 using ProductSalesApi.Dtos;
 using ProductSalesApi.Services;
 using System.Data;
@@ -683,7 +682,8 @@ public class ProductsController : ControllerBase
 
             var values = line.Split(',').Select(v => v.Trim().Trim('"')).ToArray();
 
-            var saleStartDateValue = GetColumnValue(headers, values, "SaleStartDate");            
+            var saleStartDateValue = GetColumnValue(headers, values, "SaleStartDate");
+            Console.WriteLine($"[DEBUG] CSV Row {rowNumber}: SaleStartDate raw value = '{saleStartDateValue}'");
 
             var product = new ProductImportRowDto
             {
@@ -737,7 +737,8 @@ public class ProductsController : ControllerBase
 
             if (string.IsNullOrEmpty(name)) continue;
 
-            var saleStartDateValue = GetExcelColumnValue(worksheet, row, headers, "SaleStartDate");            
+            var saleStartDateValue = GetExcelColumnValue(worksheet, row, headers, "SaleStartDate");
+            Console.WriteLine($"[DEBUG] Excel Row {row}: SaleStartDate raw value = '{saleStartDateValue}'");
 
             var product = new ProductImportRowDto
             {
@@ -789,15 +790,15 @@ public class ProductsController : ControllerBase
 
     private async Task<ProductImportResultDto> ProcessImportData(Guid importSessionId, List<ProductImportRowDto> products)
     {
-        // Convert the raw import data to proper format with parsed dates
+        // Convert the raw import data to proper format with parsed dates and numeric values
         var processedProducts = products.Select(p => new
         {
             rowNumber = p.RowNumber,
             sku = p.Sku,
             name = p.Name,
             category = p.Category,
-            price = p.Price,
-            quantityInStock = p.QuantityInStock,
+            price = decimal.TryParse(p.Price, out var priceVal) ? priceVal : 0m,
+            quantityInStock = int.TryParse(p.QuantityInStock, out var qtyVal) ? qtyVal : 0,
             description = p.Description,
             saleStartDate = ParseSaleStartDate(p.SaleStartDate)?.ToString("yyyy-MM-dd HH:mm:ss") // Convert to SQL-friendly format
         }).ToList();
@@ -806,6 +807,9 @@ public class ProductsController : ControllerBase
         {
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase
         });
+
+        Console.WriteLine($"[DEBUG] JSON being sent to ProcessProductImportData:");
+        Console.WriteLine(json);
 
         using var connection = new SqlConnection(_connectionString);
         await connection.OpenAsync();
