@@ -28,21 +28,6 @@
       </div>
     </div>
 
-    <!-- Breadcrumb -->
-    <div class="layout-breadcrumb">
-      <Breadcrumb :model="breadcrumbItems" class="mb-3">
-        <template #item="{ item }">
-          <router-link v-if="item.route" :to="item.route" class="text-decoration-none">
-            <span :class="[item.icon, 'mr-2']"></span>
-            <span class="text-color">{{ item.label }}</span>
-          </router-link>
-          <span v-else class="text-color-secondary">
-            <span :class="[item.icon, 'mr-2']"></span>
-            <span>{{ item.label }}</span>
-          </span>
-        </template>
-      </Breadcrumb>
-    </div>
 
     <!-- Main Content Area -->
     <div class="layout-main">
@@ -63,14 +48,12 @@
 <script>
 import Menubar from 'primevue/menubar'
 import Avatar from 'primevue/avatar'
-import Breadcrumb from 'primevue/breadcrumb'
 
 export default {
   name: 'App',
   components: {
     Menubar,
-    Avatar,
-    Breadcrumb
+    Avatar
   },
   data() {
     return {
@@ -111,22 +94,6 @@ export default {
           ]
         }
       ]
-    }
-  },
-  computed: {
-    breadcrumbItems() {
-      const items = [{ icon: 'pi pi-home', route: '/' }]
-      
-      if (this.$route.path.includes('/products')) {
-        items.push({ label: 'Products', icon: 'pi pi-box' })
-      } else if (this.$route.path.includes('/orders')) {
-        items.push({ label: 'Orders', icon: 'pi pi-shopping-bag' })
-        if (this.$route.path.includes('/create')) {
-          items.push({ label: 'Create Order', icon: 'pi pi-plus' })
-        }
-      }
-      
-      return items
     }
   }
 }
@@ -179,11 +146,6 @@ export default {
   padding: 0;
 }
 
-/* Breadcrumb Area */
-.layout-breadcrumb {
-  background: var(--surface-ground);
-  padding: 1rem 2rem 0;
-}
 
 /* Main Content */
 .layout-main {
@@ -229,9 +191,6 @@ export default {
     padding: 1rem;
   }
   
-  .layout-breadcrumb {
-    padding: 1rem 1rem 0;
-  }
   
   .layout-topbar-title {
     font-size: 1.25rem;

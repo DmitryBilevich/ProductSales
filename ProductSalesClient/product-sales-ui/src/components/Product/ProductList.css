@@ -15,9 +15,9 @@
 }
 
 .page-title-section .page-title {
-  margin: 0 0 0.5rem 0;
+  margin: 0;
   color: var(--text-color);
-  font-size: 2.5rem;
+  font-size: 1.75rem;
   font-weight: 600;
   display: flex;
   align-items: center;

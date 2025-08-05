@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { API_ENDPOINTS } from '../../config/api'
 import DataTable from 'primevue/datatable'
 import Column from 'primevue/column'
 import InputText from 'primevue/inputtext'
@@ -170,7 +171,7 @@ data() {
     pageSizeOptions: [5, 10, 25, 50]
   }
 },
-  mounted() {
+mounted() {
     this.loadSavedFilters()
     this.search()
   },
@@ -217,14 +218,12 @@ data() {
     },
     
     onQuickSearchInput() {
-      // When user types in quick search, populate both name and sku filters
-      if (this.quickSearchText?.trim()) {
-        this.filters.name = this.quickSearchText.trim()
-        this.filters.sku = this.quickSearchText.trim()
-      } else {
-        this.filters.name = ''
-        this.filters.sku = ''
-      }
+      // Quick search should not populate individual filter fields
+      // The search() method will handle quickSearchText separately via nameOrSku parameter
+    },
+    
+    onCategoryChange() {
+      this.search()
     },
     
     // Filter Management
@@ -438,7 +437,7 @@ data() {
             images: imageDtos
           }
           
-          return axios.post('https://localhost:7040/api/products/merge', payload)
+          return axios.post(API_ENDPOINTS.PRODUCTS_MERGE, payload)
         })
         
         await Promise.all(savePromises)
@@ -507,7 +506,7 @@ data() {
           images: imageDtos
         }
         
-        await axios.post('https://localhost:7040/api/products/merge', payload)
+        await axios.post(API_ENDPOINTS.PRODUCTS_MERGE, payload)
         
         // Remove from editing state after successful save
         delete this.editingProducts[productId]
@@ -646,7 +645,7 @@ data() {
     },
 async checkDuplicateSKU(sku, currentId) {
   try {
-    const res = await axios.get('https://localhost:7040/api/products/check-sku', {
+    const res = await axios.get(API_ENDPOINTS.PRODUCTS_CHECK_SKU, {
       params: {
         sku,
         reserve: false,
@@ -670,7 +669,7 @@ async generateSKU() {
     const datePart = new Date().toISOString().slice(0, 10).replace(/-/g, '')
     sku = `SKU-${datePart}-${suffix}`
 
-    const res = await axios.get('https://localhost:7040/api/products/check-sku', {
+    const res = await axios.get(API_ENDPOINTS.PRODUCTS_CHECK_SKU, {
       params: {
         sku,
         reserve: true,
@@ -693,7 +692,7 @@ async generateSKU() {
       this.skuError = false;
   },
 async addProduct() {
-  const res = await axios.get('https://localhost:7040/api/products/reserve-sku', {
+  const res = await axios.get(API_ENDPOINTS.PRODUCTS_RESERVE_SKU, {
     params: { reservedBy: 'Dzmitry' }
   })
 
@@ -760,7 +759,7 @@ async saveProduct() {
     }
 
     // Send request
-    await axios.post('https://localhost:7040/api/products/merge', payload)
+    await axios.post(API_ENDPOINTS.PRODUCTS_MERGE, payload)
 
     this.showFormDialog = false
     this.search()
@@ -777,7 +776,7 @@ async saveProduct() {
   confirmDelete(product) {
     if (confirm(`Are you sure you want to delete "${product.name}"? This action cannot be undone.`)) {
       axios
-        .delete(`https://localhost:7040/api/products/${product.productID}`)
+        .delete(`${API_ENDPOINTS.PRODUCTS}/${product.productID}`)
         .then(() => {
           this.search()
           alert(`Product "${product.name}" has been deleted.`)
@@ -798,9 +797,10 @@ async saveProduct() {
       const stockRanges = this.calculateStockRanges()
       
       const payload = {
-        // Search fields (name and sku will have same value for quick search)
+        // Search fields (separate for advanced filters, unified for simple search)
         name: this.filters.name?.trim() || null,
         sku: this.filters.sku?.trim() || null,
+        nameOrSku: this.quickSearchText?.trim() || null,
         categories: this.filters.categories?.length > 0 ? this.filters.categories : null,
         priceMin: this.filters.priceMin,
         priceMax: this.filters.priceMax,
@@ -821,7 +821,7 @@ async saveProduct() {
 
       this.loading = true
       axios
-        .post('https://localhost:7040/api/products/search', payload)
+        .post(API_ENDPOINTS.PRODUCTS_SEARCH, payload)
         .then(res => {
           this.products = res.data.items
           this.totalCount = res.data.totalCount
@@ -1022,16 +1022,23 @@ async saveProduct() {
           quantityInStock: Number(this.treeForm.quantityInStock) || 0,
           description: this.treeForm.description || '',
           saleStartDate: this.formatDateForServer(this.treeForm.saleStartDate),
-          operationType: 'Update',
+          operationType: this.selectedProduct.isNew ? 'Insert' : 'Update',
           images: imageDtos
         }
         
-        await axios.post('https://localhost:7040/api/products/merge', payload)
+        await axios.post(API_ENDPOINTS.PRODUCTS_MERGE, payload)
         
         // Refresh data
         this.search()
+        this.initializeTreeView() // Refresh tree structure
         
-        alert('Product saved successfully.')
+        const message = this.selectedProduct.isNew ? 'Product added successfully!' : 'Product saved successfully.'
+        alert(message)
+        
+        // Clear selection after adding new product
+        if (this.selectedProduct.isNew) {
+          this.selectedProduct = null
+        }
         
       } catch (error) {
         console.error('Error saving product:', error)
@@ -1060,11 +1067,36 @@ async saveProduct() {
       }
     },
     
-    addProductToCategory() {
-      // Use the existing addProduct functionality but pre-fill category
-      this.addProduct()
-      if (this.selectedCategory && this.selectedCategory !== 'All') {
-        this.productForm.category = this.selectedCategory
+    async addProductToCategory() {
+      try {
+        // Reserve a new SKU for the product
+        const res = await axios.get(API_ENDPOINTS.PRODUCTS_RESERVE_SKU, {
+          params: { reservedBy: 'User' }
+        })
+
+        // Set up tree form for new product
+        this.treeForm = {
+          productID: 0,
+          sku: res.data.sku,
+          name: '',
+          category: this.selectedCategory && this.selectedCategory !== 'All' ? this.selectedCategory : '',
+          price: 0,
+          quantityInStock: 0,
+          description: '',
+          images: [],
+          saleStartDate: null
+        }
+        
+        // Create a dummy selectedProduct to show the form
+        this.selectedProduct = { 
+          productID: 0, 
+          name: 'New Product',
+          isNew: true 
+        }
+        
+      } catch (error) {
+        console.error('Error reserving SKU:', error)
+        alert('Failed to create new product. Please try again.')
       }
     },
     
@@ -1273,7 +1305,7 @@ async saveProduct() {
         const formData = new FormData()
         formData.append('file', file)
         
-        const response = await axios.post('https://localhost:7040/api/products/upload-file', formData, {
+        const response = await axios.post(API_ENDPOINTS.PRODUCTS_UPLOAD, formData, {
           headers: {
             'Content-Type': 'multipart/form-data'
           }
@@ -1315,7 +1347,7 @@ async saveProduct() {
       
       try {
         const response = await axios.get(
-          `https://localhost:7040/api/products/import-staging/${this.importSessionId}`,
+          `${API_ENDPOINTS.PRODUCTS_IMPORT_STAGING}/${this.importSessionId}`,
           {
             params: {
               pageNumber: this.importData.pageNumber,
@@ -1357,8 +1389,9 @@ async saveProduct() {
     },
     
     startImportEdit(item) {
-      this.editingImportItems[item.stagingID] = {
-        stagingID: item.stagingID,
+      const stagingId = item.stagingId || item.stagingID  // Handle both naming conventions
+      this.editingImportItems[stagingId] = {
+        stagingId: stagingId,
         sku: item.sku || '',
         name: item.name || '',
         category: item.category || '',
@@ -1372,27 +1405,28 @@ async saveProduct() {
       }
     },
     
-    cancelImportEdit(stagingID) {
-      delete this.editingImportItems[stagingID]
+    cancelImportEdit(stagingId) {
+      delete this.editingImportItems[stagingId]
     },
     
     getImportEditingItem(item) {
-      return this.editingImportItems[item.stagingID] || item
+      const stagingId = item.stagingId || item.stagingID
+      return this.editingImportItems[stagingId] || item
     },
     
-    isImportItemEditing(stagingID) {
-      return this.editingImportItems[stagingID]?.isEditing || false
+    isImportItemEditing(stagingId) {
+      return this.editingImportItems[stagingId]?.isEditing || false
     },
     
-    async saveImportItem(stagingID) {
-      const item = this.editingImportItems[stagingID]
+    async saveImportItem(stagingId) {
+      const item = this.editingImportItems[stagingId]
       if (!item) return
       
       item.saving = true
       
       try {
         const payload = {
-          stagingID: item.stagingID,
+          stagingID: item.stagingId,
           sku: item.sku,
           name: item.name,
           category: item.category,
@@ -1402,10 +1436,10 @@ async saveProduct() {
           saleStartDate: this.formatDateForServer(item.saleStartDate)
         }
         
-        const response = await axios.put('https://localhost:7040/api/products/update-staging', payload)
+        const response = await axios.put(API_ENDPOINTS.PRODUCTS_UPDATE_STAGING, payload)
         
         if (response.data.success) {
-          delete this.editingImportItems[stagingID]
+          delete this.editingImportItems[stagingId]
           await this.loadImportData()
           alert('Item updated successfully')
         } else {
@@ -1419,13 +1453,13 @@ async saveProduct() {
       }
     },
     
-    async deleteImportItem(stagingID) {
+    async deleteImportItem(stagingId) {
       if (!confirm('Are you sure you want to delete this import item?')) {
         return
       }
       
       try {
-        const response = await axios.delete(`https://localhost:7040/api/products/delete-staging/${stagingID}`)
+        const response = await axios.delete(`${API_ENDPOINTS.PRODUCTS_DELETE_STAGING}/${stagingId}`)
         
         if (response.data.success) {
           await this.loadImportData()
@@ -1454,7 +1488,7 @@ async saveProduct() {
       this.importData.processing = true
       
       try {
-        const response = await axios.post(`https://localhost:7040/api/products/process-import/${this.importSessionId}`)
+        const response = await axios.post(`${API_ENDPOINTS.PRODUCTS_PROCESS_IMPORT}/${this.importSessionId}`)
         
         if (response.data.success) {
           alert(`Import completed successfully! ${response.data.processedCount} products processed.`)
@@ -1488,7 +1522,7 @@ async saveProduct() {
       }
       
       try {
-        const response = await axios.delete(`https://localhost:7040/api/products/clear-import/${this.importSessionId}`)
+        const response = await axios.delete(`${API_ENDPOINTS.PRODUCTS_CLEAR_IMPORT}/${this.importSessionId}`)
         
         if (response.data.success) {
           alert('Import data cleared successfully')
@@ -1511,7 +1545,7 @@ async saveProduct() {
     },
     
     downloadTemplate() {
-      window.open('https://localhost:7040/api/products/download-template', '_blank')
+      window.open(API_ENDPOINTS.PRODUCTS_DOWNLOAD_TEMPLATE, '_blank')
     },
     
     // === EXPORT METHODS ===
@@ -1520,7 +1554,7 @@ async saveProduct() {
       this.exportLoading = true
       
       try {
-        const response = await axios.post('https://localhost:7040/api/products/export', {
+        const response = await axios.post(API_ENDPOINTS.PRODUCTS_EXPORT_TABLE, {
           ...this.filters,
           exportType: 'current'
         }, {
@@ -1546,7 +1580,7 @@ async saveProduct() {
           selectedCategory: this.selectedCategory
         }
         
-        const response = await axios.post('https://localhost:7040/api/products/export', payload, {
+        const response = await axios.post(API_ENDPOINTS.PRODUCTS_EXPORT_TREE, payload, {
           responseType: 'blob'
         })
         
@@ -1568,7 +1602,7 @@ async saveProduct() {
       this.exportLoading = true
       
       try {
-        const response = await axios.post('https://localhost:7040/api/products/export-import', {
+        const response = await axios.post(API_ENDPOINTS.PRODUCTS_EXPORT_IMPORT, {
           importSessionId: this.importSessionId
         }, {
           responseType: 'blob'
@@ -1606,7 +1640,7 @@ async saveProduct() {
         classes.push('error-row')
       }
       
-      if (this.isImportItemEditing(data.stagingID)) {
+      if (this.isImportItemEditing(data.stagingId)) {
         classes.push('editing-row')
       }
       

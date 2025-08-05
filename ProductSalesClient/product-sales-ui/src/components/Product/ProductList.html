@@ -6,7 +6,6 @@
         <i class="pi pi-box mr-3"></i>
         Product Management
       </h1>
-      <p class="page-subtitle">Manage your gift shop inventory</p>
     </div>
     
     <div class="page-actions">
@@ -76,7 +75,7 @@
               placeholder="All Categories"
               display="chip"
               class="w-full"
-              @change="search"
+              @change="onCategoryChange"
             />
           </div>
           
@@ -310,7 +309,8 @@
         <template #title>
           <div class="form-header">
             <i class="pi pi-box mr-2"></i>
-            <span v-if="selectedProduct">{{ selectedProduct.name || 'Edit Product' }}</span>
+            <span v-if="selectedProduct && selectedProduct.isNew">Add New Product</span>
+            <span v-else-if="selectedProduct">{{ selectedProduct.name || 'Edit Product' }}</span>
             <span v-else-if="selectedCategory">Products in {{ selectedCategory }}</span>
             <span v-else>Select a category or product</span>
           </div>
@@ -321,7 +321,7 @@
           <div v-if="selectedProduct" class="tree-product-form">
             <div class="form-actions mb-4">
               <Button
-                label="Save Changes"
+                :label="selectedProduct.isNew ? 'Add Product' : 'Save Changes'"
                 icon="pi pi-save"
                 @click="saveTreeProduct"
                 class="p-button-success mr-2"
@@ -334,6 +334,7 @@
                 class="p-button-outlined"
               />
               <Button
+                v-if="!selectedProduct.isNew"
                 label="Delete"
                 icon="pi pi-trash"
                 @click="confirmDelete(selectedProduct)"
@@ -718,12 +719,12 @@
             
             <Column field="sku" header="SKU" sortable style="min-width: 120px">
               <template #body="slotProps">
-                <div v-if="isImportItemEditing(slotProps.data.stagingID)" class="inline-edit-cell">
+                <div v-if="isImportItemEditing(slotProps.data.stagingId)" class="inline-edit-cell">
                   <InputText
-                    v-model="editingImportItems[slotProps.data.stagingID].sku"
+                    v-model="editingImportItems[slotProps.data.stagingId].sku"
                     placeholder="SKU"
                     class="inline-input"
-                    :disabled="editingImportItems[slotProps.data.stagingID]?.saving"
+                    :disabled="editingImportItems[slotProps.data.stagingId]?.saving"
                   />
                 </div>
                 <div v-else>
@@ -734,12 +735,12 @@
             
             <Column field="name" header="Name" sortable style="min-width: 200px">
               <template #body="slotProps">
-                <div v-if="isImportItemEditing(slotProps.data.stagingID)" class="inline-edit-cell">
+                <div v-if="isImportItemEditing(slotProps.data.stagingId)" class="inline-edit-cell">
                   <InputText
-                    v-model="editingImportItems[slotProps.data.stagingID].name"
+                    v-model="editingImportItems[slotProps.data.stagingId].name"
                     placeholder="Product name"
                     class="inline-input"
-                    :disabled="editingImportItems[slotProps.data.stagingID]?.saving"
+                    :disabled="editingImportItems[slotProps.data.stagingId]?.saving"
                   />
                 </div>
                 <div v-else class="name-cell">
@@ -753,15 +754,15 @@
             
             <Column field="category" header="Category" sortable style="min-width: 120px">
               <template #body="slotProps">
-                <div v-if="isImportItemEditing(slotProps.data.stagingID)" class="inline-edit-cell">
+                <div v-if="isImportItemEditing(slotProps.data.stagingId)" class="inline-edit-cell">
                   <Dropdown
-                    v-model="editingImportItems[slotProps.data.stagingID].category"
+                    v-model="editingImportItems[slotProps.data.stagingId].category"
                     :options="categoryOptions"
                     placeholder="Select category"
                     class="inline-input"
                     showClear
                     editable
-                    :disabled="editingImportItems[slotProps.data.stagingID]?.saving"
+                    :disabled="editingImportItems[slotProps.data.stagingId]?.saving"
                   />
                 </div>
                 <div v-else>
@@ -775,15 +776,15 @@
             
             <Column field="price" header="Price" sortable style="min-width: 100px">
               <template #body="slotProps">
-                <div v-if="isImportItemEditing(slotProps.data.stagingID)" class="inline-edit-cell">
+                <div v-if="isImportItemEditing(slotProps.data.stagingId)" class="inline-edit-cell">
                   <InputNumber
-                    v-model="editingImportItems[slotProps.data.stagingID].price"
+                    v-model="editingImportItems[slotProps.data.stagingId].price"
                     :min="0"
                     :maxFractionDigits="2"
                     mode="currency"
                     currency="USD"
                     class="inline-input"
-                    :disabled="editingImportItems[slotProps.data.stagingID]?.saving"
+                    :disabled="editingImportItems[slotProps.data.stagingId]?.saving"
                   />
                 </div>
                 <div v-else>
@@ -797,12 +798,12 @@
             
             <Column field="quantityInStock" header="Stock" sortable style="min-width: 100px">
               <template #body="slotProps">
-                <div v-if="isImportItemEditing(slotProps.data.stagingID)" class="inline-edit-cell">
+                <div v-if="isImportItemEditing(slotProps.data.stagingId)" class="inline-edit-cell">
                   <InputNumber
-                    v-model="editingImportItems[slotProps.data.stagingID].quantityInStock"
+                    v-model="editingImportItems[slotProps.data.stagingId].quantityInStock"
                     :min="0"
                     class="inline-input"
-                    :disabled="editingImportItems[slotProps.data.stagingID]?.saving"
+                    :disabled="editingImportItems[slotProps.data.stagingId]?.saving"
                   />
                 </div>
                 <div v-else>
@@ -819,14 +820,14 @@
             
             <Column field="saleStartDate" header="Sale Start Date" sortable style="min-width: 120px">
               <template #body="slotProps">
-                <div v-if="isImportItemEditing(slotProps.data.stagingID)" class="inline-edit-cell">
+                <div v-if="isImportItemEditing(slotProps.data.stagingId)" class="inline-edit-cell">
                   <Calendar
-                    v-model="editingImportItems[slotProps.data.stagingID].saleStartDate"
+                    v-model="editingImportItems[slotProps.data.stagingId].saleStartDate"
                     placeholder="Select date"
                     dateFormat="mm/dd/yy"
                     showIcon
                     class="inline-input"
-                    :disabled="editingImportItems[slotProps.data.stagingID]?.saving"
+                    :disabled="editingImportItems[slotProps.data.stagingId]?.saving"
                   />
                 </div>
                 <div v-else class="date-cell">
@@ -856,20 +857,20 @@
             <Column header="Actions" style="width: 120px" :exportable="false">
               <template #body="slotProps">
                 <div class="action-buttons">
-                  <template v-if="isImportItemEditing(slotProps.data.stagingID)">
+                  <template v-if="isImportItemEditing(slotProps.data.stagingId)">
                     <Button 
                       icon="pi pi-save" 
                       class="p-button-text p-button-sm action-btn"
-                      @click="saveImportItem(slotProps.data.stagingID)"
+                      @click="saveImportItem(slotProps.data.stagingId)"
                       title="Save Changes"
-                      :loading="editingImportItems[slotProps.data.stagingID]?.saving"
+                      :loading="editingImportItems[slotProps.data.stagingId]?.saving"
                     />
                     <Button 
                       icon="pi pi-times" 
                       class="p-button-rounded p-button-text p-button-sm p-button-danger action-btn"
-                      @click="cancelImportEdit(slotProps.data.stagingID)"
+                      @click="cancelImportEdit(slotProps.data.stagingId)"
                       title="Cancel Edit"
-                      :disabled="editingImportItems[slotProps.data.stagingID]?.saving"
+                      :disabled="editingImportItems[slotProps.data.stagingId]?.saving"
                     />
                   </template>
                   <template v-else>
@@ -882,7 +883,7 @@
                     <Button 
                       icon="pi pi-trash" 
                       class="p-button-rounded p-button-text p-button-sm p-button-danger action-btn"
-                      @click="deleteImportItem(slotProps.data.stagingID)"
+                      @click="deleteImportItem(slotProps.data.stagingId)"
                       title="Delete"
                     />
                   </template>

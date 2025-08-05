@@ -1,15 +1,12 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.SqlClient;
-using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
-using ProductSalesApi.Data;
 using ProductSalesApi.Dtos;
-using ProductSalesApi.Models;
+using ProductSalesApi.Services;
 using System.Data;
 using System.Text.Json;
 using OfficeOpenXml;
 using System.Globalization;
-
 
 namespace ProductSalesApi.Controllers;
 
@@ -17,333 +14,265 @@ namespace ProductSalesApi.Controllers;
 [Route("api/[controller]")]
 public class ProductsController : ControllerBase
 {
-    private readonly AppDbContext _context;
     private readonly IWebHostEnvironment _env;
     private readonly string _connectionString;
+    private readonly JsonStoredProcedureService _jsonService;
 
-    public ProductsController(AppDbContext context, IWebHostEnvironment env, IConfiguration config)
+    public ProductsController(IWebHostEnvironment env, IConfiguration config, JsonStoredProcedureService jsonService)
     {
-        _context = context;
         _env = env;
         _connectionString = config.GetConnectionString("DefaultConnection")!;
+        _jsonService = jsonService;
     }
 
 
     // GET: api/products
     [HttpGet]
-    public async Task<ActionResult<IEnumerable<Product>>> GetAll()
+    public async Task<IActionResult> GetAll()
     {
-        return await _context.Products.ToListAsync();
-    }    
+        try
+        {
+            // Use search endpoint with empty filters to get all products
+            var jsonInput = JsonSerializer.Serialize(new { pageSize = 1000 }, new JsonSerializerOptions
+            {
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+            });
+
+            // Execute JSON stored procedure
+            var jsonResult = await _jsonService.ExecuteJsonQueryAsync("GetProductsJson", jsonInput);
+
+            // Return JSON directly to client
+            return Content(jsonResult, "application/json");
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { success = false, message = "Internal server error: " + ex.Message });
+        }
+    }
 
     [HttpPost("merge")]
-    public async Task<IActionResult> MergeProducts([FromBody] ProductMergeDto dto)
+    public async Task<IActionResult> MergeProducts([FromBody] object productData)
     {
-        var productId = await SaveOrUpdateProductAsync(dto);
-        await SaveProductImagesAsync(dto, productId);
-        return Ok(new { productId });
+        try
+        {
+            // Handle image files first (if base64 images are provided)
+            var jsonInput = await ProcessProductImagesAsync(productData);
+
+            // Execute JSON stored procedure
+            var jsonResult = await _jsonService.ExecuteJsonQueryAsync("MergeProductJson", jsonInput);
+
+            // Return JSON directly to client
+            return Content(jsonResult, "application/json");
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { success = false, message = "Internal server error: " + ex.Message });
+        }
     }
 
-    private async Task<int> SaveOrUpdateProductAsync(ProductMergeDto dto)
+    private async Task<string> ProcessProductImagesAsync(object productData)
     {
-        using var connection = new SqlConnection(_connectionString);
-        await connection.OpenAsync();
-
-        // Создаём DataTable на основе ProductTableType
-        var productTable = new DataTable();
-        productTable.Columns.Add("ProductID", typeof(int));
-        productTable.Columns.Add("SKU", typeof(string));
-        productTable.Columns.Add("Name", typeof(string));
-        productTable.Columns.Add("Category", typeof(string));
-        productTable.Columns.Add("Price", typeof(decimal));
-        productTable.Columns.Add("QuantityInStock", typeof(int));
-        productTable.Columns.Add("Description", typeof(string));
-        productTable.Columns.Add("SaleStartDate", typeof(DateTime));
-        productTable.Columns.Add("OperationType", typeof(string));
-
-        productTable.Rows.Add(
-            dto.ProductID,
-            dto.SKU,
-            dto.Name,
-            dto.Category ?? (object)DBNull.Value,
-            dto.Price,
-            dto.QuantityInStock,
-            dto.Description ?? (object)DBNull.Value,
-            dto.SaleStartDate ?? (object)DBNull.Value,
-            dto.OperationType
-        );
-
-        using var command = new SqlCommand("MergeProducts", connection)
+        // Serialize the input to work with it
+        var jsonString = JsonSerializer.Serialize(productData, new JsonSerializerOptions
         {
-            CommandType = CommandType.StoredProcedure
-        };
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+        });
 
-        var param = command.Parameters.AddWithValue("@Products", productTable);
-        param.SqlDbType = SqlDbType.Structured;
-        param.TypeName = "ProductTableType";
+        var productJson = JsonSerializer.Deserialize<JsonElement>(jsonString);
 
-        // Если MergeProducts возвращает ProductID через SELECT SCOPE_IDENTITY()
-        var result = await command.ExecuteScalarAsync();
-        return dto.ProductID > 0 ? dto.ProductID : Convert.ToInt32(result);
-    }
-
-
-    private async Task SaveProductImagesAsync(ProductMergeDto dto, int productId)
-    {
-        if (dto.Images == null || dto.Images.Count == 0)
-            return;
-
-        var imagePath = Path.Combine(_env.WebRootPath, "images", "products");
-        var imageTable = new DataTable();
-        imageTable.Columns.Add("SKU", typeof(string));
-        imageTable.Columns.Add("ProductID", typeof(int));
-        imageTable.Columns.Add("FileName", typeof(string));
-        imageTable.Columns.Add("ImagePath", typeof(string));
-        imageTable.Columns.Add("UploadedAt", typeof(DateTime));
-        imageTable.Columns.Add("ImageOrder", typeof(int));
-
-        var timestamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
-        var order = 1;
-
-        foreach (var img in dto.Images)
+        // Check if images with base64 data exist
+        if (productJson.TryGetProperty("images", out var imagesElement) && imagesElement.ValueKind == JsonValueKind.Array)
         {
-            var original = Path.GetFileName(img.FileName);
-            var fileName = $"{dto.SKU}_{timestamp}_{original}";
-            var fullPath = Path.Combine(imagePath, fileName);
+            var imagePath = Path.Combine(_env.WebRootPath, "images", "products");
+            Directory.CreateDirectory(imagePath); // Ensure directory exists
 
-            var base64 = img.Base64.Contains(",") ? img.Base64.Split(',')[1] : img.Base64;
-            var bytes = Convert.FromBase64String(base64);
-            await System.IO.File.WriteAllBytesAsync(fullPath, bytes);
+            var sku = productJson.TryGetProperty("sku", out var skuElement) ? skuElement.GetString() : "unknown";
+            var timestamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
+            var processedImages = new List<object>();
+            var order = 1;
 
-            imageTable.Rows.Add(dto.SKU, productId, fileName, fullPath, DateTime.UtcNow, order++);
-        }     
+            foreach (var imageElement in imagesElement.EnumerateArray())
+            {
+                if (imageElement.TryGetProperty("base64", out var base64Element) &&
+                    imageElement.TryGetProperty("fileName", out var fileNameElement))
+                {
+                    var base64Data = base64Element.GetString();
+                    var originalFileName = fileNameElement.GetString();
 
-        using var connection = new SqlConnection(_connectionString);
-        await connection.OpenAsync();
+                    if (!string.IsNullOrEmpty(base64Data) && !string.IsNullOrEmpty(originalFileName))
+                    {
+                        // Process base64 image
+                        var fileName = $"{sku}_{timestamp}_{Path.GetFileName(originalFileName)}";
+                        var fullPath = Path.Combine(imagePath, fileName);
 
-        using var cmd = new SqlCommand("SaveProductImages", connection)
-        {
-            CommandType = CommandType.StoredProcedure
-        };
+                        var base64 = base64Data.Contains(",") ? base64Data.Split(',')[1] : base64Data;
+                        var bytes = Convert.FromBase64String(base64);
+                        await System.IO.File.WriteAllBytesAsync(fullPath, bytes);
 
-        var param = cmd.Parameters.AddWithValue("@Images", imageTable);
-        param.SqlDbType = SqlDbType.Structured;
-        param.TypeName = "ProductImageTableType";
+                        processedImages.Add(new
+                        {
+                            fileName = fileName,
+                            filePath = $"/images/products/{fileName}",
+                            order = order++
+                        });
+                    }
+                }
+                else if (imageElement.TryGetProperty("fileName", out var existingFileNameElement))
+                {
+                    // Existing image, keep as is
+                    processedImages.Add(new
+                    {
+                        fileName = existingFileNameElement.GetString(),
+                        filePath = imageElement.TryGetProperty("filePath", out var pathElement) ? pathElement.GetString() : "",
+                        order = imageElement.TryGetProperty("order", out var orderElement) ? orderElement.GetInt32() : order++
+                    });
+                }
+            }
 
-        await cmd.ExecuteNonQueryAsync();
+            // Update the product data with processed images
+            var updatedProduct = JsonSerializer.Deserialize<Dictionary<string, object>>(jsonString);
+            updatedProduct["images"] = processedImages;
+
+            return JsonSerializer.Serialize(updatedProduct, new JsonSerializerOptions
+            {
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+            });
+        }
+
+        return jsonString; // Return as-is if no images to process
     }
 
 
     // GET: api/products/5
     [HttpGet("{id}")]
-    public async Task<ActionResult<Product>> Get(int id)
+    public async Task<IActionResult> Get(int id)
     {
-        var product = await _context.Products.FindAsync(id);
-        if (product == null)
-            return NotFound();
-        return product;
+        try
+        {
+            // Create JSON input with product ID
+            var jsonInput = JsonSerializer.Serialize(new { productID = id }, new JsonSerializerOptions
+            {
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+            });
+
+            // Execute JSON stored procedure
+            var jsonResult = await _jsonService.ExecuteJsonQueryAsync("GetProductByIdJson", jsonInput);
+
+            // Return JSON directly to client
+            return Content(jsonResult, "application/json");
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { success = false, message = "Internal server error: " + ex.Message });
+        }
     }
 
-    // POST: api/products
-    [HttpPost]
-    public async Task<ActionResult<Product>> Create(Product product)
-    {
-        _context.Products.Add(product);
-        await _context.SaveChangesAsync();
-        return CreatedAtAction(nameof(Get), new { id = product.ProductID }, product);
-    }
+    // POST: api/products - Use merge endpoint instead
+    // [HttpPost] - Removed in favor of /merge endpoint with JSON approach
 
-    // PUT: api/products/5
-    [HttpPut("{id}")]
-    public async Task<IActionResult> Update(int id, Product updated)
-    {
-        if (id != updated.ProductID)
-            return BadRequest();
-
-        _context.Entry(updated).State = EntityState.Modified;
-        await _context.SaveChangesAsync();
-
-        return NoContent();
-    }
+    // PUT: api/products/5 - Use merge endpoint instead
+    // [HttpPut] - Removed in favor of /merge endpoint with JSON approach
 
     // DELETE: api/products/5
     [HttpDelete("{id}")]
     public async Task<IActionResult> Delete(int id)
     {
-        var product = await _context.Products.FindAsync(id);
-        if (product == null)
-            return NotFound();
+        try
+        {
+            // Create JSON input with product ID
+            var jsonInput = JsonSerializer.Serialize(new { productID = id }, new JsonSerializerOptions
+            {
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+            });
 
-        _context.Products.Remove(product);
-        await _context.SaveChangesAsync();
-        return NoContent();
+            // Execute JSON stored procedure
+            var jsonResult = await _jsonService.ExecuteJsonQueryAsync("DeleteProductJson", jsonInput);
+
+            // Return JSON directly to client
+            return Content(jsonResult, "application/json");
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { success = false, message = "Internal server error: " + ex.Message });
+        }
     }
 
-
     [HttpPost("search")]
-    public async Task<ActionResult<PagedResult<ProductResultDto>>> Search([FromBody] ProductFilterDto filter)
+    public async Task<IActionResult> Search([FromBody] object filter)
     {
-        var result = new PagedResult<ProductResultDto>();
-        var connectionString = _context.Database.GetConnectionString();
-
-        using var connection = new SqlConnection(connectionString);
-        await connection.OpenAsync();
-
-        using var command = new SqlCommand("SearchProducts", connection)
+        try
         {
-            CommandType = CommandType.StoredProcedure
-        };
-
-        // Search parameters
-        command.Parameters.AddWithValue("@Name", (object?)filter.Name ?? DBNull.Value);
-        command.Parameters.AddWithValue("@Sku", (object?)filter.Sku ?? DBNull.Value);
-
-        // Categories as JSON array
-        var categoriesJson = filter.Categories?.Any() == true ?
-            JsonSerializer.Serialize(filter.Categories) : null;
-        command.Parameters.AddWithValue("@Categories", (object?)categoriesJson ?? DBNull.Value);
-
-        // Price range parameters
-        command.Parameters.AddWithValue("@PriceMin", (object?)filter.PriceMin ?? DBNull.Value);
-        command.Parameters.AddWithValue("@PriceMax", (object?)filter.PriceMax ?? DBNull.Value);
-
-        // Sale Start Date range parameters
-        command.Parameters.AddWithValue("@SaleStartDateMin", (object?)filter.SaleStartDateMin ?? DBNull.Value);
-        command.Parameters.AddWithValue("@SaleStartDateMax", (object?)filter.SaleStartDateMax ?? DBNull.Value);
-
-
-        // Stock ranges as table-valued parameter
-        var stockRangesTable = new DataTable();
-        stockRangesTable.Columns.Add("MinStock", typeof(int));
-        stockRangesTable.Columns.Add("MaxStock", typeof(int));
-        stockRangesTable.Columns["MaxStock"].AllowDBNull = true;
-
-        if (filter.StockRanges?.Any() == true)
-        {
-            foreach (var range in filter.StockRanges)
+            // Convert input object directly to JSON
+            var jsonInput = JsonSerializer.Serialize(filter, new JsonSerializerOptions
             {
-                stockRangesTable.Rows.Add(range.MinStock, (object?)range.MaxStock ?? DBNull.Value);
-            }
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+            });
+
+            // Execute JSON stored procedure and get JSON result
+            var jsonResult = await _jsonService.ExecuteJsonQueryAsync("GetProductsJson", jsonInput);
+
+            // Return JSON directly to client without DTO conversion
+            return Content(jsonResult, "application/json");
         }
-
-        var stockRangesParam = command.Parameters.AddWithValue("@StockRanges", stockRangesTable);
-        stockRangesParam.SqlDbType = SqlDbType.Structured;
-        stockRangesParam.TypeName = "dbo.StockRangeTableType";
-
-        // Pagination and sorting
-        command.Parameters.AddWithValue("@PageNumber", filter.PageNumber);
-        command.Parameters.AddWithValue("@PageSize", filter.PageSize);
-        command.Parameters.AddWithValue("@SortField", (object?)filter.SortField ?? "ProductID");
-        command.Parameters.AddWithValue("@SortOrder", filter.SortOrder);
-
-        using var reader = await command.ExecuteReaderAsync();
-
-        while (await reader.ReadAsync())
+        catch (Exception ex)
         {
-            var product = new ProductResultDto
-            {
-                ProductID = reader.GetInt32(0),
-                Name = reader.GetString(1),
-                Category = reader.IsDBNull(2) ? null : reader.GetString(2),
-                Price = reader.GetDecimal(3),
-                QuantityInStock = reader.GetInt32(4),
-                Description = reader.IsDBNull(5) ? null : reader.GetString(5),
-                SKU = reader.IsDBNull(6) ? null : reader.GetString(6),
-                SaleStartDate = reader.IsDBNull(7) ? null : reader.GetDateTime(7),
-                Images = new()
-            };
-
-            var imagesJson = reader.IsDBNull(8) ? "[]" : reader.GetString(8);
-
-            try
-            {
-                var images = JsonSerializer.Deserialize<List<ProductImageDto>>(imagesJson, new JsonSerializerOptions
-                {
-                    PropertyNameCaseInsensitive = true
-                });
-
-                var baseUrl = $"{Request.Scheme}://{Request.Host}";
-
-                product.Images = images?.Select(i => new ProductImageDto
-                {
-                    ImageID = i.ImageID,
-                    ProductID = product.ProductID,
-                    FileName = i.FileName,
-                    UploadedAt = i.UploadedAt,
-                    ImageOrder = i.ImageOrder,
-                    ImageUrl = $"{baseUrl}/images/products/{i.FileName}"
-                }).ToList() ?? new();
-            }
-            catch (JsonException ex)
-            {
-                Console.WriteLine($"Failed to parse image JSON for ProductID {product.ProductID}: {ex.Message}");
-            }
-
-            result.Items.Add(product);
+            return StatusCode(500, new { error = "Internal server error", message = ex.Message });
         }
-
-        if (await reader.NextResultAsync() && await reader.ReadAsync())
-        {
-            result.TotalCount = reader.GetInt32(0);
-        }
-
-        return Ok(result);
     }
 
     [HttpGet("check-sku")]
     public async Task<IActionResult> CheckOrReserveSKU([FromQuery] string sku, [FromQuery] bool reserve = false, [FromQuery] string? reservedBy = null)
     {
-        var connectionString = _context.Database.GetConnectionString();
-
-        using var connection = new SqlConnection(connectionString);
-        await connection.OpenAsync();
-
-        using var command = new SqlCommand("CheckOrReserveSKU", connection)
+        try
         {
-            CommandType = CommandType.StoredProcedure
-        };
-
-        command.Parameters.AddWithValue("@SKU", sku);
-        command.Parameters.AddWithValue("@Reserve", reserve ? 1 : 0);
-        command.Parameters.AddWithValue("@ReservedBy", (object?)reservedBy ?? DBNull.Value);
-
-        using var reader = await command.ExecuteReaderAsync();
-
-        if (await reader.ReadAsync())
-        {
-            var response = new
+            // Create JSON input
+            var jsonInput = JsonSerializer.Serialize(new
             {
-                isTaken = reader.GetInt32(0) == 1,
-                productID = reader.IsDBNull(1) ? (int?)null : reader.GetInt32(1),
-                reserved = reader.GetInt32(2) == 1
-            };
+                sku = sku,
+                reserve = reserve,
+                reservedBy = reservedBy
+            }, new JsonSerializerOptions
+            {
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+            });
 
-            return Ok(response);
+            // Execute JSON stored procedure
+            var jsonResult = await _jsonService.ExecuteJsonQueryAsync("CheckOrReserveSKUJson", jsonInput);
+
+            // Return JSON directly to client
+            return Content(jsonResult, "application/json");
         }
-
-        return BadRequest("Unexpected response from CheckOrReserveSKU");
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { success = false, message = "Internal server error: " + ex.Message });
+        }
     }
 
     [HttpGet("reserve-sku")]
     public async Task<IActionResult> ReserveSKU([FromQuery] string? reservedBy = null)
     {
-        var connectionString = _context.Database.GetConnectionString();
-
-        using var connection = new SqlConnection(connectionString);
-        await connection.OpenAsync();
-
-        using var command = new SqlCommand("ReserveNextSKU", connection)
+        try
         {
-            CommandType = CommandType.StoredProcedure
-        };
+            // Create JSON input
+            var jsonInput = JsonSerializer.Serialize(new
+            {
+                reservedBy = reservedBy
+            }, new JsonSerializerOptions
+            {
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+            });
 
-        command.Parameters.AddWithValue("@ReservedBy", (object?)reservedBy ?? DBNull.Value);
+            // Execute JSON stored procedure
+            var jsonResult = await _jsonService.ExecuteJsonQueryAsync("ReserveNextSKUJson", jsonInput);
 
-        var reservedSku = await command.ExecuteScalarAsync();
-
-        return Ok(new { sku = reservedSku?.ToString() });
+            // Return JSON directly to client
+            return Content(jsonResult, "application/json");
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { success = false, message = "Internal server error: " + ex.Message });
+        }
     }
-
 
     // === BULK IMPORT METHODS ===
 
@@ -409,12 +338,30 @@ public class ProductsController : ControllerBase
                 });
             }
 
-            // Process the data in SQL
-            var result = await ProcessImportData(importSessionId, products);
-            result.Success = true;
-            result.Message = $"Successfully processed {products.Count} rows from file";
-            result.ImportSessionId = importSessionId;
+            // Process the data using JSON stored procedure
+            var importRequest = new
+            {
+                importSessionId = importSessionId,
+                products = products.Select(p => new
+                {
+                    sku = p.Sku,
+                    name = p.Name,
+                    category = p.Category,
+                    price = decimal.TryParse(p.Price, out var priceVal) ? priceVal : 0m,
+                    quantityInStock = int.TryParse(p.QuantityInStock, out var qtyVal) ? qtyVal : 0,
+                    description = p.Description,
+                    saleStartDate = DateTime.TryParse(p.SaleStartDate, out var dateVal) ? dateVal : (DateTime?)null,
+                    operationType = "Insert" // Default operation type for uploads
+                }).ToList()
+            };
 
+            var jsonInput = JsonSerializer.Serialize(importRequest, new JsonSerializerOptions
+            {
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+            });
+
+            // Use the staging-based stored procedure instead of direct processing
+            var result = await ProcessImportData(importSessionId, products);
             return Ok(result);
         }
         catch (Exception ex)
@@ -427,278 +374,39 @@ public class ProductsController : ControllerBase
         }
     }
 
-    [HttpPost("export")]
-    public async Task<IActionResult> ExportProducts([FromBody] ProductExportRequestDto request)
-    {
-        try
-        {
-            ExcelPackage.LicenseContext = LicenseContext.NonCommercial;
-
-            using var package = new ExcelPackage();
-            var worksheet = package.Workbook.Worksheets.Add("Products");
-
-            // Add headers
-            worksheet.Cells[1, 1].Value = "SKU";
-            worksheet.Cells[1, 2].Value = "Name";
-            worksheet.Cells[1, 3].Value = "Category";
-            worksheet.Cells[1, 4].Value = "Price";
-            worksheet.Cells[1, 5].Value = "QuantityInStock";
-            worksheet.Cells[1, 6].Value = "Description";
-            worksheet.Cells[1, 7].Value = "SaleStartDate";
-
-            // Style headers
-            using (var range = worksheet.Cells[1, 1, 1, 7])
-            {
-                range.Style.Font.Bold = true;
-                range.Style.Fill.PatternType = OfficeOpenXml.Style.ExcelFillStyle.Solid;
-                range.Style.Fill.BackgroundColor.SetColor(System.Drawing.Color.LightGray);
-            }
-
-            List<Product> products;
-
-            if (request.ExportType == "tree")
-            {
-                // Export tree view products (filtered by category if selected)
-                var query = _context.Products.AsQueryable();
-                if (!string.IsNullOrEmpty(request.SelectedCategory))
-                {
-                    query = query.Where(p => p.Category == request.SelectedCategory);
-                }
-                products = await query.ToListAsync();
-            }
-            else
-            {
-                // Export current filtered products
-                products = await GetFilteredProducts(request);
-            }
-
-            // Add data rows
-            for (int i = 0; i < products.Count; i++)
-            {
-                var product = products[i];
-                var row = i + 2;
-
-                worksheet.Cells[row, 1].Value = product.SKU;
-                worksheet.Cells[row, 2].Value = product.Name;
-                worksheet.Cells[row, 3].Value = product.Category;
-                worksheet.Cells[row, 4].Value = product.Price;
-                worksheet.Cells[row, 5].Value = product.QuantityInStock;
-                worksheet.Cells[row, 6].Value = product.Description;
-                worksheet.Cells[row, 7].Value = product.SaleStartDate?.ToString("yyyy-MM-dd");
-            }
-
-            // Auto-fit columns
-            worksheet.Cells.AutoFitColumns();
-
-            var stream = new MemoryStream();
-            await package.SaveAsAsync(stream);
-            stream.Position = 0;
-
-            var fileName = $"products_export_{DateTime.Now:yyyyMMdd_HHmmss}.xlsx";
-
-            return File(stream.ToArray(),
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                fileName);
-        }
-        catch (Exception ex)
-        {
-            return BadRequest($"Export failed: {ex.Message}");
-        }
-    }
-
-    [HttpPost("export-import")]
-    public async Task<IActionResult> ExportImportData([FromBody] ImportExportRequestDto request)
-    {
-        try
-        {           
-
-            using var package = new ExcelPackage();
-            var worksheet = package.Workbook.Worksheets.Add("Import Data");
-
-            // Add headers
-            worksheet.Cells[1, 1].Value = "SKU";
-            worksheet.Cells[1, 2].Value = "Name";
-            worksheet.Cells[1, 3].Value = "Category";
-            worksheet.Cells[1, 4].Value = "Price";
-            worksheet.Cells[1, 5].Value = "QuantityInStock";
-            worksheet.Cells[1, 6].Value = "Description";
-            worksheet.Cells[1, 7].Value = "SaleStartDate";
-
-            // Style headers
-            using (var range = worksheet.Cells[1, 1, 1, 7])
-            {
-                range.Style.Font.Bold = true;
-                range.Style.Fill.PatternType = OfficeOpenXml.Style.ExcelFillStyle.Solid;
-                range.Style.Fill.BackgroundColor.SetColor(System.Drawing.Color.LightGray);
-            }
-
-            // Get import data from staging table
-            using var connection = new SqlConnection(_connectionString);
-            await connection.OpenAsync();
-
-            using var command = new SqlCommand(@"
-                SELECT SKU, Name, Category, Price, QuantityInStock, Description, SaleStartDate
-                FROM ProductImportStaging 
-                WHERE ImportSessionID = @ImportSessionID
-                ORDER BY RowNumber", connection);
-
-            command.Parameters.AddWithValue("@ImportSessionID", request.ImportSessionId);
-
-            using var reader = await command.ExecuteReaderAsync();
-            int row = 2;
-
-            while (await reader.ReadAsync())
-            {
-                worksheet.Cells[row, 1].Value = reader.IsDBNull("SKU") ? null : reader.GetString("SKU");
-                worksheet.Cells[row, 2].Value = reader.GetString("Name");
-                worksheet.Cells[row, 3].Value = reader.IsDBNull("Category") ? null : reader.GetString("Category");
-                worksheet.Cells[row, 4].Value = reader.GetDecimal("Price");
-                worksheet.Cells[row, 5].Value = reader.GetInt32("QuantityInStock");
-                worksheet.Cells[row, 6].Value = reader.IsDBNull("Description") ? null : reader.GetString("Description");
-                worksheet.Cells[row, 7].Value = reader.IsDBNull("SaleStartDate") ? null : reader.GetDateTime("SaleStartDate").ToString("yyyy-MM-dd");
-                row++;
-            }
-
-            // Auto-fit columns
-            worksheet.Cells.AutoFitColumns();
-
-            var stream = new MemoryStream();
-            await package.SaveAsAsync(stream);
-            stream.Position = 0;
-
-            var fileName = $"import_data_export_{DateTime.Now:yyyyMMdd_HHmmss}.xlsx";
-
-            return File(stream.ToArray(),
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                fileName);
-        }
-        catch (Exception ex)
-        {
-            return BadRequest($"Export failed: {ex.Message}");
-        }
-    }
-
-    [HttpDelete("delete-staging/{stagingId}")]
-    public async Task<ActionResult<ProductImportResultDto>> DeleteStagingItem(int stagingId)
-    {
-        using var connection = new SqlConnection(_connectionString);
-        await connection.OpenAsync();
-
-        using var command = new SqlCommand("DELETE FROM ProductImportStaging WHERE StagingID = @StagingID", connection);
-        command.Parameters.AddWithValue("@StagingID", stagingId);
-
-        var rowsAffected = await command.ExecuteNonQueryAsync();
-
-        if (rowsAffected > 0)
-        {
-            return Ok(new ProductImportResultDto
-            {
-                Success = true,
-                Message = "Import item deleted successfully",
-                ProcessedCount = 1
-            });
-        }
-        else
-        {
-            return NotFound(new ProductImportResultDto
-            {
-                Success = false,
-                Message = "Import item not found"
-            });
-        }
-    }
-
-
     [HttpGet("import-staging/{importSessionId}")]
-    public async Task<ActionResult<ProductImportPagedResultDto>> GetImportStaging(
+    public async Task<IActionResult> GetImportStaging(
         Guid importSessionId,
         [FromQuery] int pageNumber = 1,
         [FromQuery] int pageSize = 10,
         [FromQuery] string? sortField = "RowNumber",
         [FromQuery] int sortOrder = 1)
     {
-        using var connection = new SqlConnection(_connectionString);
-        await connection.OpenAsync();
-
-        using var command = new SqlCommand("GetProductImportStaging", connection)
+        try
         {
-            CommandType = CommandType.StoredProcedure
-        };
-
-        command.Parameters.AddWithValue("@ImportSessionID", importSessionId);
-        command.Parameters.AddWithValue("@PageNumber", pageNumber);
-        command.Parameters.AddWithValue("@PageSize", pageSize);
-        command.Parameters.AddWithValue("@SortField", sortField ?? "RowNumber");
-        command.Parameters.AddWithValue("@SortOrder", sortOrder);
-
-        var result = new ProductImportPagedResultDto();
-
-        using var reader = await command.ExecuteReaderAsync();
-
-        // Read staging items
-        while (await reader.ReadAsync())
-        {
-            var item = new ProductImportStagingDto
+            // Create JSON input
+            var jsonInput = JsonSerializer.Serialize(new
             {
-                StagingID = reader.GetInt32("StagingID"),
-                OperationType = reader.GetString("OperationType"),
-                SKU = reader.IsDBNull("SKU") ? null : reader.GetString("SKU"),
-                Name = reader.GetString("Name"),
-                Category = reader.IsDBNull("Category") ? null : reader.GetString("Category"),
-                Price = reader.GetDecimal("Price"),
-                QuantityInStock = reader.GetInt32("QuantityInStock"),
-                Description = reader.IsDBNull("Description") ? null : reader.GetString("Description"),
-                SaleStartDate = reader.IsDBNull("SaleStartDate") ? null : reader.GetDateTime("SaleStartDate"),
-                ExistingProductID = reader.IsDBNull("ExistingProductID") ? null : reader.GetInt32("ExistingProductID"),
-                ValidationErrors = reader.IsDBNull("ValidationErrors") ? null : reader.GetString("ValidationErrors"),
-                RowNumber = reader.GetInt32("RowNumber"),
-                ModifiedAt = reader.GetDateTime("ModifiedAt"),
-                CurrentName = reader.IsDBNull("CurrentName") ? null : reader.GetString("CurrentName"),
-                CurrentCategory = reader.IsDBNull("CurrentCategory") ? null : reader.GetString("CurrentCategory"),
-                CurrentPrice = reader.IsDBNull("CurrentPrice") ? null : reader.GetDecimal("CurrentPrice"),
-                CurrentQuantityInStock = reader.IsDBNull("CurrentQuantityInStock") ? null : reader.GetInt32("CurrentQuantityInStock"),
-                CurrentDescription = reader.IsDBNull("CurrentDescription") ? null : reader.GetString("CurrentDescription"),
-                CurrentSaleStartDate = reader.IsDBNull("CurrentSaleStartDate") ? null : reader.GetDateTime("CurrentSaleStartDate")
-            };
-
-            result.Items.Add(item);
-        }
-
-        // Read total count
-        if (await reader.NextResultAsync() && await reader.ReadAsync())
-        {
-            result.TotalCount = reader.GetInt32("TotalCount");
-        }
-        else
-        {
-            result.TotalCount = 0;
-        }
-
-        // Read summary
-        if (await reader.NextResultAsync() && await reader.ReadAsync())
-        {
-            result.Summary = new ProductImportSummaryDto
+                importSessionId = importSessionId,
+                pageNumber = pageNumber,
+                pageSize = pageSize,
+                sortField = sortField ?? "RowNumber",
+                sortOrder = sortOrder
+            }, new JsonSerializerOptions
             {
-                TotalRows = reader.GetInt32("TotalRows"),
-                NewProducts = reader.GetInt32("NewProducts"),
-                UpdatedProducts = reader.GetInt32("UpdatedProducts"),
-                ErrorRows = reader.GetInt32("ErrorRows"),
-                LastModified = reader.IsDBNull("LastModified") ? null : reader.GetDateTime("LastModified")
-            };
-        }
-        else
-        {
-            result.Summary = new ProductImportSummaryDto
-            {
-                TotalRows = 0,
-                NewProducts = 0,
-                UpdatedProducts = 0,
-                ErrorRows = 0,
-                LastModified = null
-            };
-        }
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+            });
 
-        return Ok(result);
+            // Execute JSON stored procedure
+            var jsonResult = await _jsonService.ExecuteJsonQueryAsync("GetImportStagingDataJson", jsonInput);
+
+            // Return JSON directly to client
+            return Content(jsonResult, "application/json");
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { success = false, message = "Internal server error: " + ex.Message });
+        }
     }
 
     [HttpPost("process-import/{importSessionId}")]
@@ -718,10 +426,11 @@ public class ProductsController : ControllerBase
 
         if (await reader.ReadAsync())
         {
+            var success = reader.GetInt32("Success") == 1;
             var result = new ProductImportResultDto
             {
-                Success = reader.GetInt32("Success") == 1,
-                Message = reader.GetString(reader.GetBoolean("Success") ? "Message" : "ErrorMessage"),
+                Success = success,
+                Message = reader.GetString(success ? "Message" : "ErrorMessage"),
                 ProcessedCount = reader.GetInt32("ProcessedCount")
             };
 
@@ -810,6 +519,198 @@ public class ProductsController : ControllerBase
             Success = false,
             Message = "Error updating staging item"
         });
+    }
+
+    [HttpDelete("delete-staging/{stagingId}")]
+    public async Task<ActionResult<ProductImportResultDto>> DeleteStagingItem(int stagingId)
+    {
+        using var connection = new SqlConnection(_connectionString);
+        await connection.OpenAsync();
+
+        using var command = new SqlCommand("DELETE FROM ProductImportStaging WHERE StagingID = @StagingID", connection);
+        command.Parameters.AddWithValue("@StagingID", stagingId);
+
+        var rowsAffected = await command.ExecuteNonQueryAsync();
+
+        if (rowsAffected > 0)
+        {
+            return Ok(new ProductImportResultDto
+            {
+                Success = true,
+                Message = "Import item deleted successfully",
+                ProcessedCount = 1
+            });
+        }
+        else
+        {
+            return NotFound(new ProductImportResultDto
+            {
+                Success = false,
+                Message = "Import item not found"
+            });
+        }
+    }
+
+    [HttpPost("export")]
+    public async Task<IActionResult> ExportProducts([FromBody] object request)
+    {
+        try
+        {
+            // Convert request to JSON and get product data from stored procedure
+            var jsonInput = JsonSerializer.Serialize(request, new JsonSerializerOptions
+            {
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+            });
+
+            // Get products data as JSON from stored procedure
+            var jsonResult = await _jsonService.ExecuteJsonQueryAsync("GetProductsForExportJson", jsonInput);
+
+            // Deserialize the products for Excel generation
+            var products = JsonSerializer.Deserialize<List<Dictionary<string, object>>>(jsonResult, new JsonSerializerOptions
+            {
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+            });
+
+            if (products == null || products.Count == 0)
+            {
+                return BadRequest("No products found for export");
+            }
+
+            // Create Excel file
+            using var package = new ExcelPackage();
+            var worksheet = package.Workbook.Worksheets.Add("Products");
+
+            // Add headers
+            worksheet.Cells[1, 1].Value = "SKU";
+            worksheet.Cells[1, 2].Value = "Name";
+            worksheet.Cells[1, 3].Value = "Category";
+            worksheet.Cells[1, 4].Value = "Price";
+            worksheet.Cells[1, 5].Value = "QuantityInStock";
+            worksheet.Cells[1, 6].Value = "Description";
+            worksheet.Cells[1, 7].Value = "SaleStartDate";
+
+            // Style headers
+            using (var range = worksheet.Cells[1, 1, 1, 7])
+            {
+                range.Style.Font.Bold = true;
+                range.Style.Fill.PatternType = OfficeOpenXml.Style.ExcelFillStyle.Solid;
+                range.Style.Fill.BackgroundColor.SetColor(System.Drawing.Color.LightGray);
+            }
+
+            // Add data rows
+            for (int i = 0; i < products.Count; i++)
+            {
+                var product = products[i];
+                var row = i + 2;
+
+                worksheet.Cells[row, 1].Value = GetJsonValue(product, "sku");
+                worksheet.Cells[row, 2].Value = GetJsonValue(product, "name");
+                worksheet.Cells[row, 3].Value = GetJsonValue(product, "category");
+                worksheet.Cells[row, 4].Value = GetJsonValue(product, "price");
+                worksheet.Cells[row, 5].Value = GetJsonValue(product, "quantityInStock");
+                worksheet.Cells[row, 6].Value = GetJsonValue(product, "description");
+
+                // Handle date formatting
+                var dateValue = GetJsonValue(product, "saleStartDate");
+                if (dateValue != null && DateTime.TryParse(dateValue.ToString(), out var saleDate))
+                {
+                    worksheet.Cells[row, 7].Value = saleDate.ToString("yyyy-MM-dd");
+                }
+            }
+
+            // Auto-fit columns
+            worksheet.Cells.AutoFitColumns();
+
+            var stream = new MemoryStream();
+            await package.SaveAsAsync(stream);
+            stream.Position = 0;
+
+            var fileName = $"products_export_{DateTime.Now:yyyyMMdd_HHmmss}.xlsx";
+
+            return File(stream.ToArray(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                fileName);
+        }
+        catch (Exception ex)
+        {
+            return BadRequest($"Export failed: {ex.Message}");
+        }
+    }
+
+    private static object? GetJsonValue(Dictionary<string, object> dict, string key)
+    {
+        return dict.TryGetValue(key, out var value) ? value : null;
+    }
+
+    [HttpPost("export-import")]
+    public async Task<IActionResult> ExportImportData([FromBody] ImportExportRequestDto request)
+    {
+        try
+        {
+            using var package = new ExcelPackage();
+            var worksheet = package.Workbook.Worksheets.Add("Import Data");
+
+            // Add headers
+            worksheet.Cells[1, 1].Value = "SKU";
+            worksheet.Cells[1, 2].Value = "Name";
+            worksheet.Cells[1, 3].Value = "Category";
+            worksheet.Cells[1, 4].Value = "Price";
+            worksheet.Cells[1, 5].Value = "QuantityInStock";
+            worksheet.Cells[1, 6].Value = "Description";
+            worksheet.Cells[1, 7].Value = "SaleStartDate";
+
+            // Style headers
+            using (var range = worksheet.Cells[1, 1, 1, 7])
+            {
+                range.Style.Font.Bold = true;
+                range.Style.Fill.PatternType = OfficeOpenXml.Style.ExcelFillStyle.Solid;
+                range.Style.Fill.BackgroundColor.SetColor(System.Drawing.Color.LightGray);
+            }
+
+            // Get import data from staging table
+            using var connection = new SqlConnection(_connectionString);
+            await connection.OpenAsync();
+
+            using var command = new SqlCommand(@"
+                SELECT SKU, Name, Category, Price, QuantityInStock, Description, SaleStartDate
+                FROM ProductImportStaging 
+                WHERE ImportSessionID = @ImportSessionID
+                ORDER BY RowNumber", connection);
+
+            command.Parameters.AddWithValue("@ImportSessionID", request.ImportSessionId);
+
+            using var reader = await command.ExecuteReaderAsync();
+            int row = 2;
+
+            while (await reader.ReadAsync())
+            {
+                worksheet.Cells[row, 1].Value = reader.IsDBNull("SKU") ? null : reader.GetString("SKU");
+                worksheet.Cells[row, 2].Value = reader.GetString("Name");
+                worksheet.Cells[row, 3].Value = reader.IsDBNull("Category") ? null : reader.GetString("Category");
+                worksheet.Cells[row, 4].Value = reader.GetDecimal("Price");
+                worksheet.Cells[row, 5].Value = reader.GetInt32("QuantityInStock");
+                worksheet.Cells[row, 6].Value = reader.IsDBNull("Description") ? null : reader.GetString("Description");
+                worksheet.Cells[row, 7].Value = reader.IsDBNull("SaleStartDate") ? null : reader.GetDateTime("SaleStartDate").ToString("yyyy-MM-dd");
+                row++;
+            }
+
+            // Auto-fit columns
+            worksheet.Cells.AutoFitColumns();
+
+            var stream = new MemoryStream();
+            await package.SaveAsAsync(stream);
+            stream.Position = 0;
+
+            var fileName = $"import_data_export_{DateTime.Now:yyyyMMdd_HHmmss}.xlsx";
+
+            return File(stream.ToArray(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                fileName);
+        }
+        catch (Exception ex)
+        {
+            return BadRequest($"Export failed: {ex.Message}");
+        }
     }
 
     [HttpGet("download-template")]
@@ -986,79 +887,4 @@ public class ProductsController : ControllerBase
         return result;
     }
 
-    private async Task<List<Product>> GetFilteredProducts(ProductExportRequestDto filter)
-    {
-        var connectionString = _context.Database.GetConnectionString();
-
-        using var connection = new SqlConnection(connectionString);
-        await connection.OpenAsync();
-
-        using var command = new SqlCommand("SearchProducts", connection)
-        {
-            CommandType = CommandType.StoredProcedure
-        };
-
-        // Search parameters
-        command.Parameters.AddWithValue("@Name", (object?)filter.Name ?? DBNull.Value);
-        command.Parameters.AddWithValue("@Sku", (object?)filter.Sku ?? DBNull.Value);
-
-        // Categories as JSON array
-        var categoriesJson = filter.Categories?.Any() == true ?
-            JsonSerializer.Serialize(filter.Categories) : null;
-        command.Parameters.AddWithValue("@Categories", (object?)categoriesJson ?? DBNull.Value);
-
-        // Price range parameters
-        command.Parameters.AddWithValue("@PriceMin", (object?)filter.PriceMin ?? DBNull.Value);
-        command.Parameters.AddWithValue("@PriceMax", (object?)filter.PriceMax ?? DBNull.Value);
-
-        // Sale Start Date range parameters
-        command.Parameters.AddWithValue("@SaleStartDateMin", (object?)filter.SaleStartDateMin ?? DBNull.Value);
-        command.Parameters.AddWithValue("@SaleStartDateMax", (object?)filter.SaleStartDateMax ?? DBNull.Value);
-
-        // Stock ranges as table-valued parameter
-        var stockRangesTable = new DataTable();
-        stockRangesTable.Columns.Add("MinStock", typeof(int));
-        stockRangesTable.Columns.Add("MaxStock", typeof(int));
-        stockRangesTable.Columns["MaxStock"].AllowDBNull = true;
-
-        if (filter.StockRanges?.Any() == true)
-        {
-            foreach (var range in filter.StockRanges)
-            {
-                stockRangesTable.Rows.Add(range.MinStock, (object?)range.MaxStock ?? DBNull.Value);
-            }
-        }
-
-        var stockRangesParam = command.Parameters.AddWithValue("@StockRanges", stockRangesTable);
-        stockRangesParam.SqlDbType = SqlDbType.Structured;
-        stockRangesParam.TypeName = "dbo.StockRangeTableType";
-
-        // Pagination and sorting (set large page size for export)
-        command.Parameters.AddWithValue("@PageNumber", 1);
-        command.Parameters.AddWithValue("@PageSize", 10000); // Large number for export
-        command.Parameters.AddWithValue("@SortField", (object?)filter.SortField ?? "ProductID");
-        command.Parameters.AddWithValue("@SortOrder", filter.SortOrder);
-
-        var products = new List<Product>();
-        using var reader = await command.ExecuteReaderAsync();
-
-        while (await reader.ReadAsync())
-        {
-            var product = new Product
-            {
-                ProductID = reader.GetInt32(0),
-                Name = reader.GetString(1),
-                Category = reader.IsDBNull(2) ? null : reader.GetString(2),
-                Price = reader.GetDecimal(3),
-                QuantityInStock = reader.GetInt32(4),
-                Description = reader.IsDBNull(5) ? null : reader.GetString(5),
-                SKU = reader.IsDBNull(6) ? null : reader.GetString(6),
-                SaleStartDate = reader.IsDBNull(7) ? null : reader.GetDateTime(7)
-            };
-
-            products.Add(product);
-        }
-
-        return products;
-    }
 }

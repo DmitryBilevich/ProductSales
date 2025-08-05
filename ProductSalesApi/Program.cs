@@ -1,6 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.OpenApi.Models;
-using ProductSalesApi.Data;
+
 using Swashbuckle.AspNetCore.SwaggerGen;
 using OfficeOpenXml;
 
@@ -16,8 +16,9 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
-builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseSqlServer(connectionString));
+
+
+builder.Services.AddScoped<ProductSalesApi.Services.JsonStoredProcedureService>();
 
 var MyAllowSpecificOrigins = "_myAllowSpecificOrigins";
 
