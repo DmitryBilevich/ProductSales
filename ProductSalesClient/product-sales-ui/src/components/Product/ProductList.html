@@ -10,12 +10,7 @@
     </div>
     
     <div class="page-actions">
-      <Button
-        label="Add Product"
-        icon="pi pi-plus"
-        class="p-button-success"
-        @click="addProduct"
-      />
+      <!-- Actions will be moved to individual view modes -->
     </div>
   </div>
 
@@ -73,13 +68,13 @@
           </div>
           
           <div class="filter-group">
-            <label for="category-filter">Category</label>
-            <Dropdown
+            <label for="category-filter">Categories</label>
+            <MultiSelect
               id="category-filter"
-              v-model="filters.category"
+              v-model="filters.categories"
               :options="categoryOptions"
               placeholder="All Categories"
-              showClear
+              display="chip"
               class="w-full"
               @change="search"
             />
@@ -143,7 +138,10 @@
           </div>
           
           <div class="filter-group">
-            <label>Stock Status</label>
+            <label>
+              Stock Status 
+              <small class="inline-help-text">(Out: 0, Low: 1-10, In: 11+)</small>
+            </label>
             <MultiSelect
               v-model="filters.stockStatus"
               :options="stockStatusOptions"
@@ -154,6 +152,34 @@
               class="w-full"
               @change="search"
             />
+          </div>
+        </div>
+
+        <!-- Row 3: Sale Start Date Filter -->
+        <div class="filter-row">
+          <div class="filter-group">
+            <label>Sale Start Date Range</label>
+            <div class="date-range">
+              <Calendar
+                v-model="filters.saleStartDateMin"
+                placeholder="Start Date"
+                dateFormat="mm/dd/yy"
+                showIcon
+                class="date-input"
+                @date-select="search"
+                @clear-click="search"
+              />
+              <span class="range-separator">to</span>
+              <Calendar
+                v-model="filters.saleStartDateMax"
+                placeholder="End Date"
+                dateFormat="mm/dd/yy"
+                showIcon
+                class="date-input"
+                @date-select="search"
+                @clear-click="search"
+              />
+            </div>
           </div>
         </div>
 
@@ -187,17 +213,18 @@
     <template #content>
       <div class="quick-filters">
         <InputText 
-          v-model="filters.name" 
+          v-model="quickSearchText" 
           placeholder="🔍 Quick search by name or SKU..."
           @keyup.enter="search"
+          @input="onQuickSearchInput"
           class="quick-search"
         />
         
-        <Dropdown
-          v-model="filters.category"
+        <MultiSelect
+          v-model="filters.categories"
           :options="categoryOptions"
-          placeholder="Category"
-          showClear
+          placeholder="Categories"
+          display="chip"
           @change="search"
         />
         
@@ -357,6 +384,19 @@
               </div>
               
               <div class="form-row">
+                <div class="form-group">
+                  <label class="form-label">Sale Start Date</label>
+                  <Calendar
+                    v-model="treeForm.saleStartDate"
+                    placeholder="Select sale start date"
+                    dateFormat="mm/dd/yy"
+                    showIcon
+                    class="form-input"
+                  />
+                </div>
+              </div>
+              
+              <div class="form-row">
                 <div class="form-group full-width">
                   <label class="form-label">Description</label>
                   <Textarea
@@ -458,7 +498,7 @@
                 </template>
               </Column>
               
-              <Column field="name" header="Name" sortable>
+              <Column field="Name" header="Name" sortable>
                 <template #body="slotProps">
                   <div class="clickable-name" @click="selectProduct(slotProps.data)">
                     <span class="product-name-link">{{ slotProps.data.name }}</span>
@@ -469,13 +509,13 @@
                 </template>
               </Column>
               
-              <Column field="price" header="Price" sortable>
+              <Column field="Price" header="Price" sortable>
                 <template #body="slotProps">
                   <span class="price-text">${{ Number(slotProps.data.price).toFixed(2) }}</span>
                 </template>
               </Column>
               
-              <Column field="quantityInStock" header="Stock" sortable>
+              <Column field="Stock" header="Stock" sortable>
                 <template #body="slotProps">
                   <Tag
                     :value="slotProps.data.quantityInStock"
@@ -521,6 +561,14 @@
         </div>
         
         <div class="table-controls">
+          <!-- Add Product Button (for Table and Inline views) -->
+          <Button
+            label="Add Product"
+            icon="pi pi-plus"
+            @click="addProduct"
+            class="p-button-success p-button-sm"
+          />
+          
           <!-- Inline Edit Controls -->
           <div v-if="currentView === 'inline'" class="inline-edit-controls">
             <Button
@@ -670,13 +718,13 @@
           </template>
         </Column>
 
-        <Column field="sku" header="SKU" sortable style="min-width: 120px">
+        <Column field="SKU" header="SKU" sortable style="min-width: 120px">
           <template #body="slotProps">
             <span class="sku-text">{{ slotProps.data.sku }}</span>
           </template>
         </Column>
 
-        <Column field="name" header="Name" sortable style="min-width: 200px">
+        <Column field="Name" header="Name" sortable style="min-width: 200px">
           <template #body="slotProps">
             <div v-if="currentView === 'inline' && isProductEditing(slotProps.data.productID)" class="inline-edit-cell">
               <div class="name-input-container">
@@ -710,7 +758,7 @@
           </template>
         </Column>
 
-        <Column field="category" header="Category" sortable style="min-width: 120px">
+        <Column field="Category" header="Category" sortable style="min-width: 120px">
           <template #body="slotProps">
             <div v-if="currentView === 'inline' && isProductEditing(slotProps.data.productID)" class="inline-edit-cell">
               <Dropdown
@@ -730,7 +778,7 @@
           </template>
         </Column>
 
-        <Column field="price" header="Price" sortable style="min-width: 100px">
+        <Column field="Price" header="Price" sortable style="min-width: 100px">
           <template #body="slotProps">
             <div v-if="currentView === 'inline' && isProductEditing(slotProps.data.productID)" class="inline-edit-cell">
               <InputNumber
@@ -750,7 +798,7 @@
           </template>
         </Column>
 
-        <Column field="quantityInStock" header="Stock" sortable style="min-width: 100px">
+        <Column field="Stock" header="Stock" sortable style="min-width: 100px">
           <template #body="slotProps">
             <div v-if="currentView === 'inline' && isProductEditing(slotProps.data.productID)" class="inline-edit-cell">
               <InputNumber
@@ -768,6 +816,29 @@
                 class="stock-badge"
               />
               <small class="stock-status">{{ getStockStatus(slotProps.data.quantityInStock) }}</small>
+            </div>
+          </template>
+        </Column>
+
+        <Column field="SaleStartDate" header="Sale Start Date" sortable style="min-width: 120px">
+          <template #body="slotProps">
+            <div v-if="currentView === 'inline' && isProductEditing(slotProps.data.productID)" class="inline-edit-cell">
+              <Calendar
+                v-model="editingProducts[slotProps.data.productID].saleStartDate"
+                placeholder="Select date"
+                dateFormat="mm/dd/yy"
+                showIcon
+                class="inline-input"
+                @date-select="hasUnsavedChanges = true"
+                @clear-click="hasUnsavedChanges = true"
+                :disabled="editingProducts[slotProps.data.productID]?.saving"
+              />
+            </div>
+            <div v-else class="date-cell">
+              <span v-if="slotProps.data.saleStartDate" class="date-text">
+                {{ formatDate(slotProps.data.saleStartDate) }}
+              </span>
+              <span v-else class="no-date-text">Not set</span>
             </div>
           </template>
         </Column>
@@ -967,6 +1038,20 @@
                 v-model="productForm.quantityInStock"
                 :min="0"
                 placeholder="0"
+                class="form-input"
+              />
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label for="saleStartDate" class="form-label">Sale Start Date</label>
+              <Calendar
+                id="saleStartDate"
+                v-model="productForm.saleStartDate"
+                placeholder="Select sale start date"
+                dateFormat="mm/dd/yy"
+                showIcon
                 class="form-input"
               />
             </div>

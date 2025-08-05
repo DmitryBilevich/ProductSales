@@ -176,6 +176,7 @@ public class ProductsController : ControllerBase
         return NoContent();
     }
 
+
     [HttpPost("search")]
     public async Task<ActionResult<PagedResult<ProductResultDto>>> Search([FromBody] ProductFilterDto filter)
     {
@@ -190,8 +191,43 @@ public class ProductsController : ControllerBase
             CommandType = CommandType.StoredProcedure
         };
 
+        // Search parameters
         command.Parameters.AddWithValue("@Name", (object?)filter.Name ?? DBNull.Value);
-        command.Parameters.AddWithValue("@Category", (object?)filter.Category ?? DBNull.Value);
+        command.Parameters.AddWithValue("@Sku", (object?)filter.Sku ?? DBNull.Value);
+
+        // Categories as JSON array
+        var categoriesJson = filter.Categories?.Any() == true ?
+            JsonSerializer.Serialize(filter.Categories) : null;
+        command.Parameters.AddWithValue("@Categories", (object?)categoriesJson ?? DBNull.Value);
+
+        // Price range parameters
+        command.Parameters.AddWithValue("@PriceMin", (object?)filter.PriceMin ?? DBNull.Value);
+        command.Parameters.AddWithValue("@PriceMax", (object?)filter.PriceMax ?? DBNull.Value);
+
+        // Sale Start Date range parameters
+        command.Parameters.AddWithValue("@SaleStartDateMin", (object?)filter.SaleStartDateMin ?? DBNull.Value);
+        command.Parameters.AddWithValue("@SaleStartDateMax", (object?)filter.SaleStartDateMax ?? DBNull.Value);
+
+
+        // Stock ranges as table-valued parameter
+        var stockRangesTable = new DataTable();
+        stockRangesTable.Columns.Add("MinStock", typeof(int));
+        stockRangesTable.Columns.Add("MaxStock", typeof(int));
+        stockRangesTable.Columns["MaxStock"].AllowDBNull = true;
+
+        if (filter.StockRanges?.Any() == true)
+        {
+            foreach (var range in filter.StockRanges)
+            {
+                stockRangesTable.Rows.Add(range.MinStock, (object?)range.MaxStock ?? DBNull.Value);
+            }
+        }
+
+        var stockRangesParam = command.Parameters.AddWithValue("@StockRanges", stockRangesTable);
+        stockRangesParam.SqlDbType = SqlDbType.Structured;
+        stockRangesParam.TypeName = "dbo.StockRangeTableType";
+
+        // Pagination and sorting
         command.Parameters.AddWithValue("@PageNumber", filter.PageNumber);
         command.Parameters.AddWithValue("@PageSize", filter.PageSize);
         command.Parameters.AddWithValue("@SortField", (object?)filter.SortField ?? "ProductID");

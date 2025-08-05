@@ -17,6 +17,7 @@ import ProductImageManager from '../ProductImageManager.vue'
 import TabView from 'primevue/tabview'
 import TabPanel from 'primevue/tabpanel'
 import Tree from 'primevue/tree'
+import Calendar from 'primevue/calendar'
 import ImageUploader from '../ImageUploader'
 
 export default {
@@ -39,6 +40,7 @@ export default {
     TabView,
     TabPanel,
     Tree,
+    Calendar,
     ProductImageManager,
     ImageUploader
   },
@@ -67,19 +69,25 @@ data() {
       price: 0,
       quantityInStock: 0,
       description: '',
-      images: []
+      images: [],
+      saleStartDate: null
     },
+    
+    // Quick search input
+    quickSearchText: '',
     
     // Filters
     filters: {
       name: '',
-      category: '',
+      categories: [],
       sku: '',
       priceMin: null,
       priceMax: null,
       stockMin: null,
       stockMax: null,
       stockStatus: [],
+      saleStartDateMin: null,
+      saleStartDateMax: null,
       pageNumber: 1,
       pageSize: 10,
       sortField: 'productID',
@@ -109,7 +117,8 @@ data() {
       category: '',
       price: 0,
       quantityInStock: 0,
-      description: ''
+      description: '',
+      saleStartDate: null
     },
     skuError: false,
     imageFiles: [],
@@ -177,17 +186,31 @@ data() {
       this.hasUnsavedChanges = false
     },
     
+    onQuickSearchInput() {
+      // When user types in quick search, populate both name and sku filters
+      if (this.quickSearchText?.trim()) {
+        this.filters.name = this.quickSearchText.trim()
+        this.filters.sku = this.quickSearchText.trim()
+      } else {
+        this.filters.name = ''
+        this.filters.sku = ''
+      }
+    },
+    
     // Filter Management
     clearFilters() {
+      this.quickSearchText = ''
       this.filters = {
         name: '',
-        category: '',
+        categories: [],
         sku: '',
         priceMin: null,
         priceMax: null,
         stockMin: null,
         stockMax: null,
         stockStatus: [],
+        saleStartDateMin: null,
+        saleStartDateMax: null,
         pageNumber: 1,
         pageSize: this.filters.pageSize,
         sortField: 'productID',
@@ -199,14 +222,17 @@ data() {
     saveFilters() {
       // Save current filters to localStorage for future sessions
       const filterState = {
+        quickSearchText: this.quickSearchText,
         name: this.filters.name,
-        category: this.filters.category,
+        categories: this.filters.categories,
         sku: this.filters.sku,
         priceMin: this.filters.priceMin,
         priceMax: this.filters.priceMax,
         stockMin: this.filters.stockMin,
         stockMax: this.filters.stockMax,
         stockStatus: this.filters.stockStatus,
+        saleStartDateMin: this.filters.saleStartDateMin,
+        saleStartDateMax: this.filters.saleStartDateMax,
         showAdvancedFilters: this.showAdvancedFilters
       }
       localStorage.setItem('productFilters', JSON.stringify(filterState))
@@ -237,6 +263,34 @@ data() {
       return 'In Stock'
     },
     
+    formatDate(dateValue) {
+      if (!dateValue) return 'Not set'
+      const date = new Date(dateValue)
+      // Use local date parts to avoid timezone issues
+      return date.toLocaleDateString('en-US')
+    },
+    
+    // Convert date to ISO string date part only (YYYY-MM-DD) to avoid timezone issues
+    formatDateForServer(date) {
+      if (!date) return null
+      const d = new Date(date)
+      // Get local date parts and format as YYYY-MM-DD
+      const year = d.getFullYear()
+      const month = String(d.getMonth() + 1).padStart(2, '0')
+      const day = String(d.getDate()).padStart(2, '0')
+      return `${year}-${month}-${day}`
+    },
+    
+    // Parse date from server (expects YYYY-MM-DD or full datetime) and create local date
+    parseDateFromServer(dateString) {
+      if (!dateString) return null
+      // Extract just the date part (YYYY-MM-DD) from datetime string
+      const datePart = dateString.split('T')[0]
+      const [year, month, day] = datePart.split('-').map(Number)
+      // Create date in local timezone
+      return new Date(year, month - 1, day)
+    },
+    
     exportData() {
       // Future: Implement data export functionality
       alert('Data export functionality will be implemented soon.')
@@ -261,6 +315,7 @@ data() {
         quantityInStock: Number(product.quantityInStock) || 0,
         description: product.description || '',
         images: product.images ? [...product.images] : [],
+        saleStartDate: product.saleStartDate ? this.parseDateFromServer(product.saleStartDate) : null,
         isEditing: true,
         saving: false,
         originalValues: { 
@@ -352,6 +407,7 @@ data() {
             price: Number(product.price) || 0,
             quantityInStock: Number(product.quantityInStock) || 0,
             description: product.description || '',
+            saleStartDate: this.formatDateForServer(product.saleStartDate),
             operationType: 'Update',
             images: imageDtos
           }
@@ -420,6 +476,7 @@ data() {
           price: Number(product.price) || 0,
           quantityInStock: Number(product.quantityInStock) || 0,
           description: product.description || '',
+          saleStartDate: this.formatDateForServer(product.saleStartDate),
           operationType: 'Update',
           images: imageDtos
         }
@@ -671,6 +728,7 @@ async saveProduct() {
     const payload = {
       ...this.productForm,
       sku: sku || null,
+      saleStartDate: this.formatDateForServer(this.productForm.saleStartDate),
       operationType: this.isEditMode ? 'Update' : 'Insert',
       images: imageDtos
     }
@@ -710,17 +768,30 @@ async saveProduct() {
       this.showGalleryDialog = true
     },
     search() {
+      // Calculate smart stock ranges
+      const stockRanges = this.calculateStockRanges()
+      
       const payload = {
-        ...this.filters,
+        // Search fields (name and sku will have same value for quick search)
         name: this.filters.name?.trim() || null,
-        category: this.filters.category?.trim() || null,
         sku: this.filters.sku?.trim() || null,
+        categories: this.filters.categories?.length > 0 ? this.filters.categories : null,
         priceMin: this.filters.priceMin,
         priceMax: this.filters.priceMax,
-        stockMin: this.filters.stockMin,
-        stockMax: this.filters.stockMax,
-        stockStatus: this.filters.stockStatus?.length > 0 ? this.filters.stockStatus : null
+        saleStartDateMin: this.formatDateForServer(this.filters.saleStartDateMin),
+        saleStartDateMax: this.formatDateForServer(this.filters.saleStartDateMax),
+        stockRanges: stockRanges.length > 0 ? stockRanges : null,
+        // Pagination and sorting
+        pageNumber: this.filters.pageNumber,
+        pageSize: this.filters.pageSize,
+        sortField: this.filters.sortField,
+        sortOrder: this.filters.sortOrder
       }
+      
+      // Debug logging (can be removed in production)
+      // console.log('=== SEARCH PAYLOAD ===')
+      // console.log('stockRanges being sent:', payload.stockRanges)
+      // console.log('=== END PAYLOAD ===')
 
       this.loading = true
       axios
@@ -882,7 +953,8 @@ async saveProduct() {
         price: Number(product.price) || 0,
         quantityInStock: Number(product.quantityInStock) || 0,
         description: product.description || '',
-        images: product.images ? [...product.images] : []
+        images: product.images ? [...product.images] : [],
+        saleStartDate: product.saleStartDate ? this.parseDateFromServer(product.saleStartDate) : null
       }
     },
     
@@ -923,6 +995,7 @@ async saveProduct() {
           price: Number(this.treeForm.price) || 0,
           quantityInStock: Number(this.treeForm.quantityInStock) || 0,
           description: this.treeForm.description || '',
+          saleStartDate: this.formatDateForServer(this.treeForm.saleStartDate),
           operationType: 'Update',
           images: imageDtos
         }
@@ -956,7 +1029,8 @@ async saveProduct() {
         price: 0,
         quantityInStock: 0,
         description: '',
-        images: []
+        images: [],
+        saleStartDate: null
       }
     },
     
@@ -1049,6 +1123,90 @@ async saveProduct() {
       if (fileInput) {
         fileInput.click()
       }
+    },
+    
+    calculateStockRanges() {
+      const stockRanges = []
+      
+      // Define status ranges
+      const statusRanges = {
+        'out-of-stock': { min: 0, max: 0 },
+        'low-stock': { min: 1, max: 10 },
+        'in-stock': { min: 11, max: null } // Open-ended: >= 11
+      }
+      
+      // Debug logging (can be removed in production)
+      // console.log('=== STOCK RANGE CALCULATION ===')
+      // console.log('stockStatus:', this.filters.stockStatus)
+      // console.log('stockMin:', this.filters.stockMin)
+      // console.log('stockMax:', this.filters.stockMax)
+      
+      // Get stock status ranges
+      const statusSelectedRanges = []
+      if (this.filters.stockStatus?.length > 0) {
+        this.filters.stockStatus.forEach(status => {
+          const range = statusRanges[status]
+          if (range) {
+            statusSelectedRanges.push(range)
+          }
+        })
+      }
+      
+      // Get manual stock range
+      const manualRange = (this.filters.stockMin !== null || this.filters.stockMax !== null) ? {
+        min: this.filters.stockMin || 0,
+        max: this.filters.stockMax || null // Open-ended if no max specified
+      } : null
+      
+      // Case 1: Only status filters
+      if (statusSelectedRanges.length > 0 && !manualRange) {
+        statusSelectedRanges.forEach(range => {
+          stockRanges.push({ minStock: range.min, maxStock: range.max })
+        })
+      }
+      // Case 2: Only manual range
+      else if (!statusSelectedRanges.length && manualRange) {
+        stockRanges.push({ minStock: manualRange.min, maxStock: manualRange.max })
+      }
+      // Case 3: Both status and manual range - find intersections
+      else if (statusSelectedRanges.length > 0 && manualRange) {
+        statusSelectedRanges.forEach(statusRange => {
+          // Calculate intersection of manual range with each status range
+          const intersectionMin = Math.max(manualRange.min, statusRange.min)
+          
+          // Handle null max values (open-ended ranges)
+          let intersectionMax
+          if (manualRange.max === null && statusRange.max === null) {
+            intersectionMax = null // Both open-ended
+          } else if (manualRange.max === null) {
+            intersectionMax = statusRange.max // Manual is open-ended, use status max
+          } else if (statusRange.max === null) {
+            intersectionMax = manualRange.max // Status is open-ended, use manual max
+          } else {
+            intersectionMax = Math.min(manualRange.max, statusRange.max) // Both have max
+          }
+          
+          // Only add if there's a valid intersection
+          // For bounded ranges: min must be <= max
+          // For open-ended ranges: always valid if intersectionMax is null
+          const isValidIntersection = intersectionMax === null || intersectionMin <= intersectionMax
+          
+          // Debug logging for intersection calculation (can be removed in production)
+          // console.log(`Intersection: Status(${statusRange.min}-${statusRange.max}) + Manual(${manualRange.min}-${manualRange.max}) = (${intersectionMin}-${intersectionMax}) Valid: ${isValidIntersection}`)
+          
+          if (isValidIntersection) {
+            stockRanges.push({ minStock: intersectionMin, maxStock: intersectionMax })
+          }
+        })
+      }
+      
+      // Special case: If we have stock filters active but no valid ranges, 
+      // we need to send an impossible range to match nothing
+      if (statusSelectedRanges.length > 0 && manualRange && stockRanges.length === 0) {
+        stockRanges.push({ minStock: -1, maxStock: -1 }) // Impossible range - no stock can be negative
+      }
+      
+      return stockRanges
     }
   }
 }

@@ -97,15 +97,31 @@
   font-size: 0.9rem;
 }
 
+.filter-help-text {
+  color: var(--text-color-secondary);
+  font-size: 0.75rem;
+  margin-top: 0.25rem;
+  font-style: italic;
+}
+
+.inline-help-text {
+  color: var(--text-color-secondary);
+  font-size: 0.7rem;
+  font-weight: normal;
+  margin-left: 0.5rem;
+}
+
 .price-range,
-.stock-range {
+.stock-range,
+.date-range {
   display: flex;
   align-items: center;
   gap: 0.5rem;
 }
 
 .price-input,
-.stock-input {
+.stock-input,
+.date-input {
   flex: 1;
 }
 
@@ -170,9 +186,9 @@
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  margin-right: 1rem;
-  padding-right: 1rem;
-  border-right: 1px solid var(--surface-border);
+  margin-left: 1rem;
+  padding-left: 1rem;
+  border-left: 1px solid var(--surface-border);
 }
 
 .page-size-dropdown {
@@ -317,6 +333,23 @@
 .stock-status {
   color: var(--text-color-secondary);
   font-size: 0.8rem;
+}
+
+/* Date Cell */
+.date-cell {
+  display: flex;
+  align-items: center;
+}
+
+.date-text {
+  color: var(--text-color);
+  font-size: 0.9rem;
+}
+
+.no-date-text {
+  color: var(--text-color-secondary);
+  font-size: 0.85rem;
+  font-style: italic;
 }
 
 /* Action Buttons */
@@ -632,9 +665,9 @@
   }
   
   .inline-edit-controls {
-    border-right: none;
-    padding-right: 0;
-    margin-right: 0;
+    border-left: none;
+    padding-left: 0;
+    margin-left: 0;
     justify-content: center;
   }
 
@@ -671,7 +704,8 @@
   }
 
   .price-range,
-  .stock-range {
+  .stock-range,
+  .date-range {
     flex-direction: column;
     gap: 0.5rem;
   }
