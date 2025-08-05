@@ -53,6 +53,7 @@ data() {
     editingProducts: {},
     hasUnsavedChanges: false,
     bulkSaving: false,
+    exportLoading: false,
     
     // Tree View
     treeNodes: [],
@@ -320,10 +321,6 @@ data() {
       return new Date(year, month - 1, day)
     },
     
-    exportData() {
-      // Future: Implement data export functionality
-      alert('Data export functionality will be implemented soon.')
-    },
     
     viewProduct(product) {
       // Open a read-only view of the product
@@ -1515,6 +1512,87 @@ async saveProduct() {
     
     downloadTemplate() {
       window.open('https://localhost:7040/api/products/download-template', '_blank')
+    },
+    
+    // === EXPORT METHODS ===
+    
+    async exportProducts() {
+      this.exportLoading = true
+      
+      try {
+        const response = await axios.post('https://localhost:7040/api/products/export', {
+          ...this.filters,
+          exportType: 'current'
+        }, {
+          responseType: 'blob'
+        })
+        
+        this.downloadFile(response.data, `products_export_${new Date().toISOString().split('T')[0]}.xlsx`)
+        
+      } catch (error) {
+        console.error('Export error:', error)
+        alert('Failed to export products: ' + (error.response?.data?.message || error.message))
+      } finally {
+        this.exportLoading = false
+      }
+    },
+    
+    async exportTreeProducts() {
+      this.exportLoading = true
+      
+      try {
+        const payload = {
+          exportType: 'tree',
+          selectedCategory: this.selectedCategory
+        }
+        
+        const response = await axios.post('https://localhost:7040/api/products/export', payload, {
+          responseType: 'blob'
+        })
+        
+        const filename = this.selectedCategory 
+          ? `products_${this.selectedCategory}_${new Date().toISOString().split('T')[0]}.xlsx`
+          : `all_products_${new Date().toISOString().split('T')[0]}.xlsx`
+          
+        this.downloadFile(response.data, filename)
+        
+      } catch (error) {
+        console.error('Export error:', error)
+        alert('Failed to export products: ' + (error.response?.data?.message || error.message))
+      } finally {
+        this.exportLoading = false
+      }
+    },
+    
+    async exportImportData() {
+      this.exportLoading = true
+      
+      try {
+        const response = await axios.post('https://localhost:7040/api/products/export-import', {
+          importSessionId: this.importSessionId
+        }, {
+          responseType: 'blob'
+        })
+        
+        this.downloadFile(response.data, `import_data_${new Date().toISOString().split('T')[0]}.xlsx`)
+        
+      } catch (error) {
+        console.error('Export error:', error)
+        alert('Failed to export import data: ' + (error.response?.data?.message || error.message))
+      } finally {
+        this.exportLoading = false
+      }
+    },
+    
+    downloadFile(blob, filename) {
+      const url = window.URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = filename
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      window.URL.revokeObjectURL(url)
     },
     
     getImportOperationSeverity(operationType) {

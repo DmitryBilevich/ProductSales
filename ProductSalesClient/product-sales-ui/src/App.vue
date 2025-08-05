@@ -54,8 +54,7 @@
     <!-- Footer -->
     <div class="layout-footer">
       <div class="layout-footer-content">
-        <span class="font-medium">Gift Shop Management System</span>
-        <span class="text-color-secondary ml-auto">© 2025</span>
+        <span class="footer-copyright">Dzmitry Bilevich©2025</span>
       </div>
     </div>
   </div>
@@ -209,9 +208,15 @@ export default {
 .layout-footer-content {
   display: flex;
   align-items: center;
+  justify-content: center;
   padding: 1rem 2rem;
   color: var(--text-color-secondary);
   font-size: 0.875rem;
+}
+
+.footer-copyright {
+  font-weight: 500;
+  color: var(--text-color-secondary);
 }
 
 /* Responsive Design */

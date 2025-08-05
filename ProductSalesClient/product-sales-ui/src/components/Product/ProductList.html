@@ -259,6 +259,13 @@
         <template #content>
           <div class="tree-controls mb-3">
             <Button
+              label="Export"
+              icon="pi pi-download"
+              @click="exportTreeProducts"
+              class="p-button-outlined p-button-sm mr-2"
+              :loading="exportLoading"
+            />
+            <Button
               label="Expand All"
               icon="pi pi-plus"
               @click="expandAll"
@@ -631,10 +638,18 @@
             
             <div class="import-actions">
               <Button 
+                label="Export" 
+                icon="pi pi-download" 
+                @click="exportImportData"
+                class="p-button-outlined"
+                :loading="exportLoading"
+                :disabled="importData.items.length === 0"
+              />
+              <Button 
                 label="Process Import" 
                 icon="pi pi-check" 
                 @click="processImport"
-                class="p-button-success"
+                class="p-button-success ml-2"
                 :disabled="importData.summary.errorRows > 0 || importData.processing"
                 :loading="importData.processing"
               />
@@ -894,6 +909,15 @@
         </div>
         
         <div class="table-controls">
+          <!-- Export Button (for Table and Inline views) -->
+          <Button
+            label="Export"
+            icon="pi pi-download"
+            @click="exportProducts"
+            class="p-button-outlined p-button-sm"
+            :loading="exportLoading"
+          />
+          
           <!-- Add Product Button (for Table and Inline views) -->
           <Button
             label="Add Product"
@@ -933,12 +957,6 @@
             @click="search"
             class="p-button-outlined p-button-sm"
             title="Refresh"
-          />
-          <Button
-            icon="pi pi-download"
-            @click="exportData"
-            class="p-button-outlined p-button-sm"
-            title="Export"
           />
         </div>
       </div>

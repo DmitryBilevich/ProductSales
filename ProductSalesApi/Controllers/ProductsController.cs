@@ -427,6 +427,157 @@ public class ProductsController : ControllerBase
         }
     }
 
+    [HttpPost("export")]
+    public async Task<IActionResult> ExportProducts([FromBody] ProductExportRequestDto request)
+    {
+        try
+        {
+            ExcelPackage.LicenseContext = LicenseContext.NonCommercial;
+
+            using var package = new ExcelPackage();
+            var worksheet = package.Workbook.Worksheets.Add("Products");
+
+            // Add headers
+            worksheet.Cells[1, 1].Value = "SKU";
+            worksheet.Cells[1, 2].Value = "Name";
+            worksheet.Cells[1, 3].Value = "Category";
+            worksheet.Cells[1, 4].Value = "Price";
+            worksheet.Cells[1, 5].Value = "QuantityInStock";
+            worksheet.Cells[1, 6].Value = "Description";
+            worksheet.Cells[1, 7].Value = "SaleStartDate";
+
+            // Style headers
+            using (var range = worksheet.Cells[1, 1, 1, 7])
+            {
+                range.Style.Font.Bold = true;
+                range.Style.Fill.PatternType = OfficeOpenXml.Style.ExcelFillStyle.Solid;
+                range.Style.Fill.BackgroundColor.SetColor(System.Drawing.Color.LightGray);
+            }
+
+            List<Product> products;
+
+            if (request.ExportType == "tree")
+            {
+                // Export tree view products (filtered by category if selected)
+                var query = _context.Products.AsQueryable();
+                if (!string.IsNullOrEmpty(request.SelectedCategory))
+                {
+                    query = query.Where(p => p.Category == request.SelectedCategory);
+                }
+                products = await query.ToListAsync();
+            }
+            else
+            {
+                // Export current filtered products
+                products = await GetFilteredProducts(request);
+            }
+
+            // Add data rows
+            for (int i = 0; i < products.Count; i++)
+            {
+                var product = products[i];
+                var row = i + 2;
+
+                worksheet.Cells[row, 1].Value = product.SKU;
+                worksheet.Cells[row, 2].Value = product.Name;
+                worksheet.Cells[row, 3].Value = product.Category;
+                worksheet.Cells[row, 4].Value = product.Price;
+                worksheet.Cells[row, 5].Value = product.QuantityInStock;
+                worksheet.Cells[row, 6].Value = product.Description;
+                worksheet.Cells[row, 7].Value = product.SaleStartDate?.ToString("yyyy-MM-dd");
+            }
+
+            // Auto-fit columns
+            worksheet.Cells.AutoFitColumns();
+
+            var stream = new MemoryStream();
+            await package.SaveAsAsync(stream);
+            stream.Position = 0;
+
+            var fileName = $"products_export_{DateTime.Now:yyyyMMdd_HHmmss}.xlsx";
+
+            return File(stream.ToArray(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                fileName);
+        }
+        catch (Exception ex)
+        {
+            return BadRequest($"Export failed: {ex.Message}");
+        }
+    }
+
+    [HttpPost("export-import")]
+    public async Task<IActionResult> ExportImportData([FromBody] ImportExportRequestDto request)
+    {
+        try
+        {           
+
+            using var package = new ExcelPackage();
+            var worksheet = package.Workbook.Worksheets.Add("Import Data");
+
+            // Add headers
+            worksheet.Cells[1, 1].Value = "SKU";
+            worksheet.Cells[1, 2].Value = "Name";
+            worksheet.Cells[1, 3].Value = "Category";
+            worksheet.Cells[1, 4].Value = "Price";
+            worksheet.Cells[1, 5].Value = "QuantityInStock";
+            worksheet.Cells[1, 6].Value = "Description";
+            worksheet.Cells[1, 7].Value = "SaleStartDate";
+
+            // Style headers
+            using (var range = worksheet.Cells[1, 1, 1, 7])
+            {
+                range.Style.Font.Bold = true;
+                range.Style.Fill.PatternType = OfficeOpenXml.Style.ExcelFillStyle.Solid;
+                range.Style.Fill.BackgroundColor.SetColor(System.Drawing.Color.LightGray);
+            }
+
+            // Get import data from staging table
+            using var connection = new SqlConnection(_connectionString);
+            await connection.OpenAsync();
+
+            using var command = new SqlCommand(@"
+                SELECT SKU, Name, Category, Price, QuantityInStock, Description, SaleStartDate
+                FROM ProductImportStaging 
+                WHERE ImportSessionID = @ImportSessionID
+                ORDER BY RowNumber", connection);
+
+            command.Parameters.AddWithValue("@ImportSessionID", request.ImportSessionId);
+
+            using var reader = await command.ExecuteReaderAsync();
+            int row = 2;
+
+            while (await reader.ReadAsync())
+            {
+                worksheet.Cells[row, 1].Value = reader.IsDBNull("SKU") ? null : reader.GetString("SKU");
+                worksheet.Cells[row, 2].Value = reader.GetString("Name");
+                worksheet.Cells[row, 3].Value = reader.IsDBNull("Category") ? null : reader.GetString("Category");
+                worksheet.Cells[row, 4].Value = reader.GetDecimal("Price");
+                worksheet.Cells[row, 5].Value = reader.GetInt32("QuantityInStock");
+                worksheet.Cells[row, 6].Value = reader.IsDBNull("Description") ? null : reader.GetString("Description");
+                worksheet.Cells[row, 7].Value = reader.IsDBNull("SaleStartDate") ? null : reader.GetDateTime("SaleStartDate").ToString("yyyy-MM-dd");
+                row++;
+            }
+
+            // Auto-fit columns
+            worksheet.Cells.AutoFitColumns();
+
+            var stream = new MemoryStream();
+            await package.SaveAsAsync(stream);
+            stream.Position = 0;
+
+            var fileName = $"import_data_export_{DateTime.Now:yyyyMMdd_HHmmss}.xlsx";
+
+            return File(stream.ToArray(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                fileName);
+        }
+        catch (Exception ex)
+        {
+            return BadRequest($"Export failed: {ex.Message}");
+        }
+    }
+
     [HttpDelete("delete-staging/{stagingId}")]
     public async Task<ActionResult<ProductImportResultDto>> DeleteStagingItem(int stagingId)
     {
@@ -724,8 +875,6 @@ public class ProductsController : ControllerBase
     {
         var products = new List<ProductImportRowDto>();
 
-        ExcelPackage.LicenseContext = LicenseContext.NonCommercial;
-
         using var package = new ExcelPackage(stream);
         var worksheet = package.Workbook.Worksheets.FirstOrDefault();
 
@@ -837,5 +986,79 @@ public class ProductsController : ControllerBase
         return result;
     }
 
+    private async Task<List<Product>> GetFilteredProducts(ProductExportRequestDto filter)
+    {
+        var connectionString = _context.Database.GetConnectionString();
 
+        using var connection = new SqlConnection(connectionString);
+        await connection.OpenAsync();
+
+        using var command = new SqlCommand("SearchProducts", connection)
+        {
+            CommandType = CommandType.StoredProcedure
+        };
+
+        // Search parameters
+        command.Parameters.AddWithValue("@Name", (object?)filter.Name ?? DBNull.Value);
+        command.Parameters.AddWithValue("@Sku", (object?)filter.Sku ?? DBNull.Value);
+
+        // Categories as JSON array
+        var categoriesJson = filter.Categories?.Any() == true ?
+            JsonSerializer.Serialize(filter.Categories) : null;
+        command.Parameters.AddWithValue("@Categories", (object?)categoriesJson ?? DBNull.Value);
+
+        // Price range parameters
+        command.Parameters.AddWithValue("@PriceMin", (object?)filter.PriceMin ?? DBNull.Value);
+        command.Parameters.AddWithValue("@PriceMax", (object?)filter.PriceMax ?? DBNull.Value);
+
+        // Sale Start Date range parameters
+        command.Parameters.AddWithValue("@SaleStartDateMin", (object?)filter.SaleStartDateMin ?? DBNull.Value);
+        command.Parameters.AddWithValue("@SaleStartDateMax", (object?)filter.SaleStartDateMax ?? DBNull.Value);
+
+        // Stock ranges as table-valued parameter
+        var stockRangesTable = new DataTable();
+        stockRangesTable.Columns.Add("MinStock", typeof(int));
+        stockRangesTable.Columns.Add("MaxStock", typeof(int));
+        stockRangesTable.Columns["MaxStock"].AllowDBNull = true;
+
+        if (filter.StockRanges?.Any() == true)
+        {
+            foreach (var range in filter.StockRanges)
+            {
+                stockRangesTable.Rows.Add(range.MinStock, (object?)range.MaxStock ?? DBNull.Value);
+            }
+        }
+
+        var stockRangesParam = command.Parameters.AddWithValue("@StockRanges", stockRangesTable);
+        stockRangesParam.SqlDbType = SqlDbType.Structured;
+        stockRangesParam.TypeName = "dbo.StockRangeTableType";
+
+        // Pagination and sorting (set large page size for export)
+        command.Parameters.AddWithValue("@PageNumber", 1);
+        command.Parameters.AddWithValue("@PageSize", 10000); // Large number for export
+        command.Parameters.AddWithValue("@SortField", (object?)filter.SortField ?? "ProductID");
+        command.Parameters.AddWithValue("@SortOrder", filter.SortOrder);
+
+        var products = new List<Product>();
+        using var reader = await command.ExecuteReaderAsync();
+
+        while (await reader.ReadAsync())
+        {
+            var product = new Product
+            {
+                ProductID = reader.GetInt32(0),
+                Name = reader.GetString(1),
+                Category = reader.IsDBNull(2) ? null : reader.GetString(2),
+                Price = reader.GetDecimal(3),
+                QuantityInStock = reader.GetInt32(4),
+                Description = reader.IsDBNull(5) ? null : reader.GetString(5),
+                SKU = reader.IsDBNull(6) ? null : reader.GetString(6),
+                SaleStartDate = reader.IsDBNull(7) ? null : reader.GetDateTime(7)
+            };
+
+            products.Add(product);
+        }
+
+        return products;
+    }
 }
