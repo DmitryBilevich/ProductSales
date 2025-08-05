@@ -1313,3 +1313,136 @@
 .p-button[data-pc-loading="true"] {
   pointer-events: none;
 }
+
+/* ===== FORM VALIDATION ===== */
+.error-message {
+  color: var(--red-500);
+  font-size: 0.875rem;
+  margin-top: 0.25rem;
+  display: block;
+}
+
+.p-invalid {
+  border-color: var(--red-500) !important;
+  box-shadow: 0 0 0 0.2rem rgba(239, 68, 68, 0.2) !important;
+}
+
+.p-invalid:focus {
+  border-color: var(--red-500) !important;
+  box-shadow: 0 0 0 0.2rem rgba(239, 68, 68, 0.2) !important;
+}
+
+.form-group {
+  margin-bottom: 1rem;
+}
+
+.form-group .error-message {
+  margin-top: 0.5rem;
+}
+
+/* ===== TREE VIEW IMAGE IMPROVEMENTS ===== */
+.tree-image-container {
+  position: relative;
+  overflow: hidden;
+  border-radius: 8px;
+}
+
+.tree-thumbnail {
+  width: 100px;
+  height: 80px;
+  object-fit: cover;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: transform 0.2s ease;
+}
+
+.tree-thumbnail:hover {
+  transform: scale(1.05);
+}
+
+.image-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  border-radius: 8px;
+}
+
+.tree-image-container:hover .image-overlay {
+  opacity: 1;
+}
+
+.image-overlay .p-button {
+  color: white !important;
+}
+
+.no-images-tree {
+  text-align: center;
+  padding: 2rem;
+  color: var(--text-color-secondary);
+  border: 2px dashed var(--surface-border);
+  border-radius: 8px;
+  margin-bottom: 1rem;
+}
+
+.no-images-tree p {
+  margin: 0.5rem 0 0 0;
+  font-size: 0.9rem;
+}
+
+.image-gallery-tree {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.image-item-tree {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.image-controls-tree {
+  display: flex;
+  gap: 0.25rem;
+}
+
+/* ===== MINI IMAGE IMPROVEMENTS ===== */
+.mini-image-container {
+  position: relative;
+  cursor: pointer;
+  border-radius: 4px;
+  overflow: hidden;
+  transition: transform 0.2s ease;
+}
+
+.mini-image-container:hover {
+  transform: scale(1.1);
+}
+
+.mini-image.clickable {
+  cursor: pointer;
+}
+
+.image-count-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  background: rgba(0, 0, 0, 0.8);
+  color: white;
+  border-radius: 10px;
+  padding: 2px 6px;
+  font-size: 0.75rem;
+  font-weight: bold;
+  min-width: 16px;
+  text-align: center;
+}

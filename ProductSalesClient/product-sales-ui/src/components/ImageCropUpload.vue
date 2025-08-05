@@ -3,6 +3,9 @@
     <input type="file" @change="onFileChange" accept="image/*" />
 
     <div v-if="imageUrl" style="margin-top: 1rem;">
+      <p style="margin-bottom: 0.5rem; color: #666; font-size: 0.9rem;">
+        Adjust the crop area and click "Add to Product" to include this image:
+      </p>
       <cropper
         :src="imageUrl"
         :stencil-props="{ aspectRatio: 4 / 3 }"
@@ -10,8 +13,8 @@
         class="cropper"
       />
       <div style="margin-top: 1rem;">
-        <Button label="Save & Upload" @click="uploadCropped" />
-        <Button label="Cancel" class="p-button-secondary" @click="reset" />
+        <Button label="Add to Product" icon="pi pi-plus" @click="addCroppedImage" class="p-button-success" />
+        <Button label="Discard" icon="pi pi-times" class="p-button-secondary" @click="reset" />
       </div>
     </div>
   </div>
@@ -21,7 +24,6 @@
 import { Cropper } from 'vue-advanced-cropper'
 import 'vue-advanced-cropper/dist/style.css'
 import Button from 'primevue/button'
-import axios from 'axios'
 
 export default {
   name: 'ImageCropUpload',
@@ -46,22 +48,24 @@ export default {
       this.originalFile = file
       this.imageUrl = URL.createObjectURL(file)
     },
-    async uploadCropped() {
+    async addCroppedImage() {
       const canvas = this.$refs.cropper.getResult().canvas
       if (!canvas) return alert('Crop area not selected.')
 
-      canvas.toBlob(async blob => {
-        const formData = new FormData()
-        formData.append('file', blob, this.originalFile.name)
+      // Convert canvas to base64 instead of uploading to server
+      const base64Data = canvas.toDataURL('image/jpeg', 0.8) // 0.8 quality
+      
+      // Emit the image data to parent component
+      this.$emit('image-added', {
+        fileName: this.originalFile.name,
+        base64Data: base64Data,
+        contentType: 'image/jpeg'
+      })
 
-        await axios.post(
-          `https://localhost:7040/api/products/${this.productId}/images`,
-          formData
-        )
-
-        this.reset()
-        this.$emit('uploaded')
-      }, 'image/jpeg')
+      // Show success feedback
+      alert('Image added to product successfully!')
+      
+      this.reset()
     },
     reset() {
       this.imageUrl = null

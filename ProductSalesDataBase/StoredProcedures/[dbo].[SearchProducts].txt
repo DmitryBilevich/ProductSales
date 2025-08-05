@@ -1,0 +1,58 @@
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+CREATE PROCEDURE [dbo].[SearchProducts]
+    @Name NVARCHAR(100) = NULL,
+    @Category NVARCHAR(100) = NULL,
+    @PageNumber INT = 1,
+    @PageSize INT = 10,
+    @SortField NVARCHAR(100) = 'ProductID',
+    @SortOrder INT = 1
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    IF @PageNumber < 1 SET @PageNumber = 1;
+    IF @PageSize < 1 SET @PageSize = 10;
+
+    DECLARE @StartRow INT = (@PageNumber - 1) * @PageSize;
+
+    SELECT 
+        p.ProductID,
+        p.Name,
+        p.Category,
+        p.Price,
+        p.QuantityInStock,
+        p.Description,
+        p.SKU,
+        p.SaleStartDate,
+        (
+            SELECT 
+                i.ImageID,
+                i.FileName,
+                i.UploadedAt
+            FROM ProductImages i
+            WHERE i.ProductID = p.ProductID
+            FOR JSON PATH
+        ) AS ImagesJson
+    FROM Products p
+    WHERE
+        (@Name IS NULL OR p.Name LIKE '%' + @Name + '%') AND
+        (@Category IS NULL OR p.Category = @Category)
+    ORDER BY
+        CASE WHEN @SortField = 'ProductID' AND @SortOrder = 1 THEN p.ProductID END ASC,
+        CASE WHEN @SortField = 'ProductID' AND @SortOrder = -1 THEN p.ProductID END DESC,
+        CASE WHEN @SortField = 'Name' AND @SortOrder = 1 THEN p.Name END ASC,
+        CASE WHEN @SortField = 'Name' AND @SortOrder = -1 THEN p.Name END DESC,
+        CASE WHEN @SortField = 'Category' AND @SortOrder = 1 THEN p.Category END ASC,
+        CASE WHEN @SortField = 'Category' AND @SortOrder = -1 THEN p.Category END DESC
+    OFFSET @StartRow ROWS FETCH NEXT @PageSize ROWS ONLY;
+
+    SELECT COUNT(*) AS TotalCount
+    FROM Products p
+    WHERE
+        (@Name IS NULL OR p.Name LIKE '%' + @Name + '%') AND
+        (@Category IS NULL OR p.Category = @Category);
+END
+GO

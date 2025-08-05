@@ -1,0 +1,9 @@
+CREATE TYPE [dbo].[ProductImageTableType] AS TABLE(
+	[SKU] [nvarchar](50) NULL,
+	[ProductID] [int] NULL,
+	[FileName] [nvarchar](255) NULL,
+	[ImagePath] [nvarchar](255) NULL,
+	[UploadedAt] [datetime] NULL,
+	[ImageOrder] [int] NULL
+)
+GO

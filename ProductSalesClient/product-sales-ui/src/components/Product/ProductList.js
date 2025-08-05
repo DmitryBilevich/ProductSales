@@ -123,6 +123,16 @@ data() {
       saleStartDate: null
     },
     skuError: false,
+    
+    // Form validation
+    formErrors: {
+      sku: '',
+      name: '',
+      category: '',
+      price: '',
+      quantityInStock: ''
+    },
+    
     imageFiles: [],
     
     // Import functionality
@@ -159,7 +169,9 @@ data() {
     ],
     
     categoryOptions: [
-      'Electronics', 'Electronics2', 'Furniture', 'Lighting', 'Accessories'
+      'Bags', 'Bath', 'Books', 'Candles', 'Drinkware', 'Home Decor', 
+      'Jewelry', 'Kitchenware', 'Office', 'Personal Care', 'Plants', 
+      'Stationery', 'Toys'
     ],
     
     stockStatusOptions: [
@@ -176,6 +188,120 @@ mounted() {
     this.search()
   },
   methods: {
+    // Form Validation
+    validateForm() {
+      this.clearFormErrors()
+      let isValid = true
+
+      // Validate SKU (required)
+      if (!this.productForm.sku || this.productForm.sku.trim() === '') {
+        this.formErrors.sku = 'SKU is required'
+        isValid = false
+      }
+
+      // Validate name (required)
+      if (!this.productForm.name || this.productForm.name.trim() === '') {
+        this.formErrors.name = 'Product name is required'
+        isValid = false
+      }
+
+      // Validate category (required)
+      if (!this.productForm.category || this.productForm.category.trim() === '') {
+        this.formErrors.category = 'Category is required'
+        isValid = false
+      }
+
+      // Validate price (required, must be > 0)
+      if (!this.productForm.price || this.productForm.price <= 0) {
+        this.formErrors.price = 'Price must be greater than 0'
+        isValid = false
+      }
+
+      // Validate stock quantity (required, must be >= 0)
+      if (this.productForm.quantityInStock === null || this.productForm.quantityInStock === undefined || this.productForm.quantityInStock < 0) {
+        this.formErrors.quantityInStock = 'Stock quantity must be 0 or greater'
+        isValid = false
+      }
+
+      return isValid
+    },
+
+    validateField(fieldName) {
+      // Clear existing error for this field
+      this.formErrors[fieldName] = ''
+
+      switch (fieldName) {
+        case 'sku':
+          if (!this.productForm.sku || this.productForm.sku.trim() === '') {
+            this.formErrors.sku = 'SKU is required'
+          }
+          break
+        case 'name':
+          if (!this.productForm.name || this.productForm.name.trim() === '') {
+            this.formErrors.name = 'Product name is required'
+          }
+          break
+        case 'category':
+          if (!this.productForm.category || this.productForm.category.trim() === '') {
+            this.formErrors.category = 'Category is required'
+          }
+          break
+        case 'price':
+          if (!this.productForm.price || this.productForm.price <= 0) {
+            this.formErrors.price = 'Price must be greater than 0'
+          }
+          break
+        case 'quantityInStock':
+          if (this.productForm.quantityInStock === null || this.productForm.quantityInStock === undefined || this.productForm.quantityInStock < 0) {
+            this.formErrors.quantityInStock = 'Stock quantity must be 0 or greater'
+          }
+          break
+      }
+    },
+
+    validateTreeForm() {
+      let isValid = true
+      
+      // Use treeForm instead of productForm for tree view validation
+      if (!this.treeForm.sku || this.treeForm.sku.trim() === '') {
+        alert('SKU is required')
+        isValid = false
+      }
+      
+      if (!this.treeForm.name || this.treeForm.name.trim() === '') {
+        alert('Product name is required')
+        isValid = false
+      }
+      
+      if (!this.treeForm.category || this.treeForm.category.trim() === '') {
+        alert('Category is required')
+        isValid = false
+      }
+      
+      if (!this.treeForm.price || this.treeForm.price <= 0) {
+        alert('Price must be greater than 0')
+        isValid = false
+      }
+      
+      if (this.treeForm.quantityInStock === null || this.treeForm.quantityInStock === undefined || this.treeForm.quantityInStock < 0) {
+        alert('Stock quantity must be 0 or greater')
+        isValid = false
+      }
+      
+      return isValid
+    },
+
+    clearFormErrors() {
+      this.formErrors = {
+        sku: '',
+        name: '',
+        category: '',
+        price: '',
+        quantityInStock: ''
+      }
+      this.skuError = false
+    },
+
     // View Management
     onViewChange(event) {
       const newView = event.value
@@ -354,6 +480,17 @@ mounted() {
     
     cancelInlineEdit(productId) {
       if (this.editingProducts[productId]) {
+        const product = this.editingProducts[productId]
+        
+        // If it's a new product, remove it from the products array entirely
+        if (product.isNew) {
+          const productIndex = this.products.findIndex(p => p.productID === productId)
+          if (productIndex !== -1) {
+            this.products.splice(productIndex, 1)
+            this.searchResult.totalRecords = this.products.length
+          }
+        }
+        
         delete this.editingProducts[productId]
         this.checkUnsavedChanges()
       }
@@ -476,17 +613,21 @@ mounted() {
         if (product.images && product.images.length > 0) {
           for (const image of product.images) {
             if (image.isNew) {
-              // New image - send as base64
+              // New image - extract base64 data from data URL and send as imageData
+              const base64Data = image.imageUrl.includes(',') ? image.imageUrl.split(',')[1] : image.imageUrl
               imageDtos.push({
                 fileName: image.fileName,
-                contentType: image.contentType,
-                base64: image.imageUrl,
+                contentType: image.contentType || 'image/jpeg',
+                imageData: base64Data,
                 order: image.order
               })
             } else {
-              // Existing image - just update order if needed
+              // Existing image - include all data for update
               imageDtos.push({
                 imageID: image.imageID,
+                fileName: image.fileName,
+                imageData: image.imageData,
+                contentType: image.contentType,
                 order: image.order
               })
             }
@@ -494,7 +635,7 @@ mounted() {
         }
         
         const payload = {
-          productID: product.productID,
+          productID: product.isNew ? 0 : product.productID,
           sku: product.sku,
           name: product.name,
           category: product.category,
@@ -502,11 +643,22 @@ mounted() {
           quantityInStock: Number(product.quantityInStock) || 0,
           description: product.description || '',
           saleStartDate: this.formatDateForServer(product.saleStartDate),
-          operationType: 'Update',
+          operationType: product.isNew ? 'Insert' : 'Update',
           images: imageDtos
         }
         
-        await axios.post(API_ENDPOINTS.PRODUCTS_MERGE, payload)
+        const response = await axios.post(API_ENDPOINTS.PRODUCTS_MERGE, payload)
+        
+        // Handle new product creation
+        if (product.isNew && response.data.product) {
+          const savedProduct = JSON.parse(response.data.product)
+          
+          // Find and update the product in the array with the real data
+          const productIndex = this.products.findIndex(p => p.productID === productId)
+          if (productIndex !== -1) {
+            this.products[productIndex] = savedProduct
+          }
+        }
         
         // Remove from editing state after successful save
         delete this.editingProducts[productId]
@@ -643,6 +795,20 @@ mounted() {
         reader.readAsDataURL(file)
       })
     },
+    
+    // Helper method to determine content type from file
+    getContentTypeFromFile(file) {
+      const ext = file.name.split('.').pop().toLowerCase()
+      const contentTypeMap = {
+        'jpg': 'image/jpeg',
+        'jpeg': 'image/jpeg',
+        'png': 'image/png',
+        'gif': 'image/gif',
+        'webp': 'image/webp',
+        'bmp': 'image/bmp'
+      }
+      return contentTypeMap[ext] || 'image/jpeg'
+    },
 async checkDuplicateSKU(sku, currentId) {
   try {
     const res = await axios.get(API_ENDPOINTS.PRODUCTS_CHECK_SKU, {
@@ -686,11 +852,18 @@ async generateSKU() {
   throw new Error('Could not generate unique SKU')
 },
     editProduct(product) {
-    this.productForm = { ...product }
-    this.isEditMode = true
-    this.showFormDialog = true
-      this.skuError = false;
-  },
+      this.productForm = { 
+        ...product,
+        // Ensure images are properly formatted for editing
+        images: product.images ? product.images.map(img => ({
+          ...img,
+          isNew: false // Mark as existing image
+        })) : []
+      }
+      this.isEditMode = true
+      this.showFormDialog = true
+      this.clearFormErrors()
+    },
 async addProduct() {
   const res = await axios.get(API_ENDPOINTS.PRODUCTS_RESERVE_SKU, {
     params: { reservedBy: 'Dzmitry' }
@@ -707,15 +880,21 @@ async addProduct() {
     saleStartDate: null
   }
 
-  this.skuError = false;
+  this.clearFormErrors()
   this.isEditMode = false
   this.showFormDialog = true
 },
 async saveProduct() {
   try {
     this.saving = true
-    this.skuError = false
+    
+    // Validate form first
+    if (!this.validateForm()) {
+      this.saving = false
+      return
+    }
 
+    this.skuError = false
     const sku = this.productForm.sku?.trim()
 
     if (sku) {
@@ -726,10 +905,34 @@ async saveProduct() {
       }
     }
 
-    // Collect images in Base64ImageDto[]
+    // Collect images for both new and edit mode
     let imageDtos = []
 
-    if (!this.isEditMode && this.imageFiles?.length > 0) {
+    if (this.isEditMode && this.productForm.images?.length > 0) {
+      // Edit mode - include images from productForm
+      imageDtos = this.productForm.images.map(image => {
+        if (image.isNew) {
+          // New image - extract base64 data from data URL
+          const base64Data = image.imageData || (image.imageUrl?.includes(',') ? image.imageUrl.split(',')[1] : image.imageUrl)
+          return {
+            fileName: image.fileName,
+            contentType: image.contentType || 'image/jpeg',
+            imageData: base64Data,
+            order: image.order
+          }
+        } else {
+          // Existing image - include all data
+          return {
+            imageID: image.imageID,
+            fileName: image.fileName,
+            imageData: image.imageData,
+            contentType: image.contentType,
+            order: image.order
+          }
+        }
+      })
+    } else if (!this.isEditMode && this.imageFiles?.length > 0) {
+      // New product mode - convert file uploads to base64
       const fileToBase64 = file =>
         new Promise(resolve => {
           const reader = new FileReader()
@@ -737,16 +940,18 @@ async saveProduct() {
           reader.readAsDataURL(file)
         })
 
-      imageDtos = await Promise.all(
+      const base64Images = await Promise.all(
         this.imageFiles.map(async (file) => {
           const base64 = await fileToBase64(file)
           return {
             fileName: file.name,
             contentType: file.type,
-            base64
+            imageData: base64.includes(',') ? base64.split(',')[1] : base64,
+            order: this.imageFiles.indexOf(file)
           }
         })
       )
+      imageDtos = base64Images
     }
 
     // Prepare payload
@@ -987,6 +1192,11 @@ async saveProduct() {
     async saveTreeProduct() {
       if (!this.selectedProduct) return
       
+      // Validate tree form first
+      if (!this.validateTreeForm()) {
+        return
+      }
+      
       try {
         this.saving = true
         
@@ -996,17 +1206,21 @@ async saveProduct() {
         if (this.treeForm.images && this.treeForm.images.length > 0) {
           for (const image of this.treeForm.images) {
             if (image.isNew) {
-              // New image - send as base64
+              // New image - extract base64 data from data URL and send as imageData
+              const base64Data = image.imageUrl.includes(',') ? image.imageUrl.split(',')[1] : image.imageUrl
               imageDtos.push({
                 fileName: image.fileName,
-                contentType: image.contentType,
-                base64: image.imageUrl,
+                contentType: image.contentType || 'image/jpeg',
+                imageData: base64Data,
                 order: image.order
               })
             } else {
-              // Existing image - just update order if needed
+              // Existing image - include all data for update
               imageDtos.push({
                 imageID: image.imageID,
+                fileName: image.fileName,
+                imageData: image.imageData,
+                contentType: image.contentType,
                 order: image.order
               })
             }
@@ -1026,18 +1240,34 @@ async saveProduct() {
           images: imageDtos
         }
         
-        await axios.post(API_ENDPOINTS.PRODUCTS_MERGE, payload)
+        const response = await axios.post(API_ENDPOINTS.PRODUCTS_MERGE, payload)
         
-        // Refresh data
+        // Get the updated product data from response
+        const savedProduct = response.data.product ? JSON.parse(response.data.product) : null
+        
+        // Store current selection info before refresh
+        const wasNewProduct = this.selectedProduct.isNew
+        const currentProductId = savedProduct ? savedProduct.productID : this.treeForm.productID
+        
+        // Refresh data but maintain focus
         this.search()
-        this.initializeTreeView() // Refresh tree structure
+        await this.initializeTreeView() // Refresh tree structure
         
-        const message = this.selectedProduct.isNew ? 'Product added successfully!' : 'Product saved successfully.'
+        const message = wasNewProduct ? 'Product added successfully!' : 'Product saved successfully.'
         alert(message)
         
-        // Clear selection after adding new product
-        if (this.selectedProduct.isNew) {
-          this.selectedProduct = null
+        // Maintain focus on the saved product after alert
+        if (savedProduct) {
+          // Find and select the saved product in the tree
+          this.selectProductInTree(savedProduct)
+        } else if (currentProductId && !wasNewProduct) {
+          // For existing products, try to find and reselect by ID
+          const productToReselect = this.products.find(p => p.productID === currentProductId)
+          if (productToReselect) {
+            this.selectProductInTree(productToReselect)
+          } else {
+            this.refreshCurrentTreeSelection()
+          }
         }
         
       } catch (error) {
@@ -1048,6 +1278,39 @@ async saveProduct() {
       }
     },
     
+    selectProductInTree(product) {
+      // Find the product in the tree and select it
+      this.selectedProduct = product
+      this.selectedCategory = product.category
+      
+      // Update tree form with the saved product data
+      this.treeForm = {
+        productID: product.productID,
+        sku: product.sku,
+        name: product.name,
+        category: product.category,
+        price: product.price,
+        quantityInStock: product.quantityInStock,
+        description: product.description,
+        saleStartDate: product.saleStartDate ? this.parseDateFromServer(product.saleStartDate) : null,
+        images: product.images || []
+      }
+      
+      // Update tree selection
+      const productKey = `product-${product.productID}`
+      this.selectedKeys = { [productKey]: true }
+    },
+    
+    refreshCurrentTreeSelection() {
+      // Refresh the currently selected product data
+      if (this.selectedProduct && !this.selectedProduct.isNew) {
+        const currentProduct = this.products.find(p => p.productID === this.selectedProduct.productID)
+        if (currentProduct) {
+          this.selectProductInTree(currentProduct)
+        }
+      }
+    },
+
     cancelTreeEdit() {
       // Clear the product selection and go back to empty state
       this.selectedProduct = null
@@ -1176,6 +1439,13 @@ async saveProduct() {
       }
     },
     
+    openTreeImageGallery() {
+      // Pass the original image objects directly - the template will handle the transformation
+      this.galleryImages = this.treeForm.images || []
+      this.galleryTitle = `${this.treeForm.name || 'Product'} - Images`
+      this.showGalleryDialog = true
+    },
+
     openTreeFileDialog() {
       const fileInput = document.getElementById('treeFileInput')
       if (fileInput) {
@@ -1315,6 +1585,12 @@ async saveProduct() {
           // Set a fixed session ID since we only have one user
           this.importSessionId = '11111111-1111-1111-1111-111111111111'
           this.uploadProgress.message = response.data.message
+          
+          // Set the summary data immediately from upload response
+          if (response.data.summary) {
+            this.importData.summary = response.data.summary
+          }
+          
           await this.loadImportData()
           alert(`File uploaded successfully! ${response.data.summary?.totalRows || 0} rows processed.`)
         } else {
@@ -1346,21 +1622,27 @@ async saveProduct() {
       this.importData.loading = true
       
       try {
+        const params = {
+          pageNumber: this.importData.pageNumber,
+          pageSize: this.importData.pageSize,
+          sortField: this.importData.sortField,
+          sortOrder: this.importData.sortOrder
+        }
+        
+        console.log('Loading import data with params:', params)
+        
         const response = await axios.get(
           `${API_ENDPOINTS.PRODUCTS_IMPORT_STAGING}/${this.importSessionId}`,
-          {
-            params: {
-              pageNumber: this.importData.pageNumber,
-              pageSize: this.importData.pageSize,
-              sortField: this.importData.sortField,
-              sortOrder: this.importData.sortOrder
-            }
-          }
+          { params }
         )
         
         this.importData.items = response.data.items || []
         this.importData.totalCount = response.data.totalCount || 0
-        this.importData.summary = response.data.summary || {}
+        
+        // Only update summary if the response actually contains one, otherwise preserve existing
+        if (response.data.summary && Object.keys(response.data.summary).length > 0) {
+          this.importData.summary = response.data.summary
+        }
         
       } catch (error) {
         console.error('Error loading import data:', error)
@@ -1383,8 +1665,10 @@ async saveProduct() {
     },
     
     onImportSort(event) {
+      console.log('Import sort event:', event)
       this.importData.sortField = event.sortField
       this.importData.sortOrder = event.sortOrder
+      this.importData.pageNumber = 1 // Reset to first page when sorting
       this.loadImportData()
     },
     
@@ -1645,6 +1929,62 @@ async saveProduct() {
       }
       
       return classes.join(' ')
+    },
+    
+    // Helper method to get image src from base64 data or legacy imageUrl
+    getImageSrc(image) {
+      if (!image) return this.getPlaceholderImage()
+      
+      // Handle base64 data (new format)
+      if (image.imageData) {
+        const contentType = image.contentType || 'image/jpeg'
+        return `data:${contentType};base64,${image.imageData}`
+      }
+      
+      // Handle legacy imageUrl format (if any still exist)
+      if (image.imageUrl) {
+        return image.imageUrl
+      }
+      
+      // Fallback placeholder
+      return this.getPlaceholderImage()
+    },
+    
+    // Generate placeholder image data URL
+    getPlaceholderImage() {
+      return 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTAwIiBoZWlnaHQ9IjEwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjZjJmMmYyIi8+PHRleHQgeD0iNTAlIiB5PSI1MCUiIGZvbnQtZmFtaWx5PSJBcmlhbCIgZm9udC1zaXplPSIxMiIgZmlsbD0iIzk5OSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZHk9Ii4zZW0iPk5vIEltYWdlPC90ZXh0Pjwvc3ZnPg=='
+    },
+    
+    // Handle image deletion from ProductImageManager
+    handleImageDelete(imageId) {
+      if (this.productForm.images) {
+        const imageIndex = this.productForm.images.findIndex(img => img.imageID === imageId)
+        if (imageIndex !== -1) {
+          this.productForm.images.splice(imageIndex, 1)
+          // Reorder remaining images
+          this.productForm.images.forEach((img, index) => {
+            img.order = index
+          })
+        }
+      }
+    },
+    
+    // Handle image addition from ProductImageManager
+    handleImageAdd(imageData) {
+      if (!this.productForm.images) {
+        this.productForm.images = []
+      }
+      
+      const newImage = {
+        imageID: `temp-${Date.now()}`,
+        fileName: imageData.fileName,
+        imageData: imageData.base64Data.includes(',') ? imageData.base64Data.split(',')[1] : imageData.base64Data,
+        contentType: imageData.contentType,
+        order: this.productForm.images.length,
+        isNew: true
+      }
+      
+      this.productForm.images.push(newImage)
     }
   }
 }

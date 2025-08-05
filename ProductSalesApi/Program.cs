@@ -38,6 +38,16 @@ builder.Services.AddControllers()
         options.JsonSerializerOptions.ReferenceHandler = System.Text.Json.Serialization.ReferenceHandler.IgnoreCycles;
     });
 
+
+var baseDirectory = AppContext.BaseDirectory;
+var dbPath = Path.GetFullPath(Path.Combine(baseDirectory, @"..\..\..\DataBase\GiftShop.mdf"));
+
+var absoluteConnectionString =
+    $"Server=(localdb)\\MSSQLLocalDB;AttachDbFilename={dbPath};Integrated Security=True;MultipleActiveResultSets=true";
+
+// ?????????????? ???????? DefaultConnection
+builder.Configuration["ConnectionStrings:DefaultConnection"] = absoluteConnectionString;
+
 var app = builder.Build();
 
 // Configure the HTTP request pipeline.

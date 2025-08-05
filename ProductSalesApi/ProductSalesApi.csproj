@@ -20,10 +20,17 @@
 
   <ItemGroup>
     <Folder Include="DataBase\" />
-    <Folder Include="Data\" />
     <Folder Include="Models\" />
-    <Folder Include="wwwroot\images\products\" />
     <Folder Include="wwwroot\templates\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="DataBase\GiftShop.mdf">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </None>
+    <None Update="DataBase\GiftShop_log.ldf">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </None>
   </ItemGroup>
 
 </Project>

@@ -1,0 +1,27 @@
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+CREATE PROCEDURE [dbo].[SearchOrders]
+    @FromDate DATE = NULL,
+    @ToDate DATE = NULL,
+    @CustomerName NVARCHAR(100) = NULL,
+    @ProductIDs ProductIDList READONLY
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    SELECT DISTINCT o.*
+    FROM Orders o
+    JOIN OrderItems oi ON o.OrderID = oi.OrderID
+    WHERE
+        (@FromDate IS NULL OR o.OrderDate >= @FromDate) AND
+        (@ToDate IS NULL OR o.OrderDate <= @ToDate) AND
+        (@CustomerName IS NULL OR o.CustomerName LIKE '%' + @CustomerName + '%') AND
+        (
+            NOT EXISTS (SELECT 1 FROM @ProductIDs) OR
+            oi.ProductID IN (SELECT ProductID FROM @ProductIDs)
+        )
+    ORDER BY o.OrderDate DESC
+END;
+GO

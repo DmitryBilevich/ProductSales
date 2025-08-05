@@ -55,8 +55,11 @@ public class ProductsController : ControllerBase
     {
         try
         {
-            // Handle image files first (if base64 images are provided)
-            var jsonInput = await ProcessProductImagesAsync(productData);
+            // Convert input object directly to JSON
+            var jsonInput = JsonSerializer.Serialize(productData, new JsonSerializerOptions
+            {
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+            });
 
             // Execute JSON stored procedure
             var jsonResult = await _jsonService.ExecuteJsonQueryAsync("MergeProductJson", jsonInput);
@@ -70,77 +73,6 @@ public class ProductsController : ControllerBase
         }
     }
 
-    private async Task<string> ProcessProductImagesAsync(object productData)
-    {
-        // Serialize the input to work with it
-        var jsonString = JsonSerializer.Serialize(productData, new JsonSerializerOptions
-        {
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase
-        });
-
-        var productJson = JsonSerializer.Deserialize<JsonElement>(jsonString);
-
-        // Check if images with base64 data exist
-        if (productJson.TryGetProperty("images", out var imagesElement) && imagesElement.ValueKind == JsonValueKind.Array)
-        {
-            var imagePath = Path.Combine(_env.WebRootPath, "images", "products");
-            Directory.CreateDirectory(imagePath); // Ensure directory exists
-
-            var sku = productJson.TryGetProperty("sku", out var skuElement) ? skuElement.GetString() : "unknown";
-            var timestamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
-            var processedImages = new List<object>();
-            var order = 1;
-
-            foreach (var imageElement in imagesElement.EnumerateArray())
-            {
-                if (imageElement.TryGetProperty("base64", out var base64Element) &&
-                    imageElement.TryGetProperty("fileName", out var fileNameElement))
-                {
-                    var base64Data = base64Element.GetString();
-                    var originalFileName = fileNameElement.GetString();
-
-                    if (!string.IsNullOrEmpty(base64Data) && !string.IsNullOrEmpty(originalFileName))
-                    {
-                        // Process base64 image
-                        var fileName = $"{sku}_{timestamp}_{Path.GetFileName(originalFileName)}";
-                        var fullPath = Path.Combine(imagePath, fileName);
-
-                        var base64 = base64Data.Contains(",") ? base64Data.Split(',')[1] : base64Data;
-                        var bytes = Convert.FromBase64String(base64);
-                        await System.IO.File.WriteAllBytesAsync(fullPath, bytes);
-
-                        processedImages.Add(new
-                        {
-                            fileName = fileName,
-                            filePath = $"/images/products/{fileName}",
-                            order = order++
-                        });
-                    }
-                }
-                else if (imageElement.TryGetProperty("fileName", out var existingFileNameElement))
-                {
-                    // Existing image, keep as is
-                    processedImages.Add(new
-                    {
-                        fileName = existingFileNameElement.GetString(),
-                        filePath = imageElement.TryGetProperty("filePath", out var pathElement) ? pathElement.GetString() : "",
-                        order = imageElement.TryGetProperty("order", out var orderElement) ? orderElement.GetInt32() : order++
-                    });
-                }
-            }
-
-            // Update the product data with processed images
-            var updatedProduct = JsonSerializer.Deserialize<Dictionary<string, object>>(jsonString);
-            updatedProduct["images"] = processedImages;
-
-            return JsonSerializer.Serialize(updatedProduct, new JsonSerializerOptions
-            {
-                PropertyNamingPolicy = JsonNamingPolicy.CamelCase
-            });
-        }
-
-        return jsonString; // Return as-is if no images to process
-    }
 
 
     // GET: api/products/5
@@ -350,7 +282,7 @@ public class ProductsController : ControllerBase
                     price = decimal.TryParse(p.Price, out var priceVal) ? priceVal : 0m,
                     quantityInStock = int.TryParse(p.QuantityInStock, out var qtyVal) ? qtyVal : 0,
                     description = p.Description,
-                    saleStartDate = DateTime.TryParse(p.SaleStartDate, out var dateVal) ? dateVal : (DateTime?)null,
+                    saleStartDate = ParseSaleStartDate(p.SaleStartDate),
                     operationType = "Insert" // Default operation type for uploads
                 }).ToList()
             };
@@ -751,6 +683,8 @@ public class ProductsController : ControllerBase
 
             var values = line.Split(',').Select(v => v.Trim().Trim('"')).ToArray();
 
+            var saleStartDateValue = GetColumnValue(headers, values, "SaleStartDate");            
+
             var product = new ProductImportRowDto
             {
                 RowNumber = rowNumber,
@@ -760,7 +694,7 @@ public class ProductsController : ControllerBase
                 Price = GetColumnValue(headers, values, "Price") ?? "0",
                 QuantityInStock = GetColumnValue(headers, values, "QuantityInStock") ?? "0",
                 Description = GetColumnValue(headers, values, "Description"),
-                SaleStartDate = GetColumnValue(headers, values, "SaleStartDate")
+                SaleStartDate = saleStartDateValue
             };
 
             if (!string.IsNullOrEmpty(product.Name))
@@ -803,6 +737,8 @@ public class ProductsController : ControllerBase
 
             if (string.IsNullOrEmpty(name)) continue;
 
+            var saleStartDateValue = GetExcelColumnValue(worksheet, row, headers, "SaleStartDate");            
+
             var product = new ProductImportRowDto
             {
                 RowNumber = row,
@@ -812,7 +748,7 @@ public class ProductsController : ControllerBase
                 Price = GetExcelColumnValue(worksheet, row, headers, "Price") ?? "0",
                 QuantityInStock = GetExcelColumnValue(worksheet, row, headers, "QuantityInStock") ?? "0",
                 Description = GetExcelColumnValue(worksheet, row, headers, "Description"),
-                SaleStartDate = GetExcelColumnValue(worksheet, row, headers, "SaleStartDate")
+                SaleStartDate = saleStartDateValue
             };
 
             products.Add(product);
@@ -853,7 +789,20 @@ public class ProductsController : ControllerBase
 
     private async Task<ProductImportResultDto> ProcessImportData(Guid importSessionId, List<ProductImportRowDto> products)
     {
-        var json = JsonSerializer.Serialize(products, new JsonSerializerOptions
+        // Convert the raw import data to proper format with parsed dates
+        var processedProducts = products.Select(p => new
+        {
+            rowNumber = p.RowNumber,
+            sku = p.Sku,
+            name = p.Name,
+            category = p.Category,
+            price = p.Price,
+            quantityInStock = p.QuantityInStock,
+            description = p.Description,
+            saleStartDate = ParseSaleStartDate(p.SaleStartDate)?.ToString("yyyy-MM-dd HH:mm:ss") // Convert to SQL-friendly format
+        }).ToList();
+
+        var json = JsonSerializer.Serialize(processedProducts, new JsonSerializerOptions
         {
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase
         });
@@ -885,6 +834,77 @@ public class ProductsController : ControllerBase
         }
 
         return result;
+    }
+
+    private static DateTime? ParseSaleStartDate(string? dateString)
+    {
+        if (string.IsNullOrWhiteSpace(dateString))
+            return null;
+
+        // First, try to parse as Excel serial date number
+        if (double.TryParse(dateString, out var serialNumber))
+        {
+            try
+            {
+                // Excel base date is January 1, 1900, but Excel incorrectly treats 1900 as a leap year
+                // So we need to account for this bug in Excel's date system
+                var excelBaseDate = new DateTime(1900, 1, 1);
+
+                // Excel serial number 1 = January 1, 1900
+                // But we need to subtract 2 because:
+                // 1. Excel counts January 1, 1900 as day 1 (not day 0)
+                // 2. Excel incorrectly includes February 29, 1900 as a valid date
+                var actualDate = excelBaseDate.AddDays(serialNumber - 2);
+
+                // Sanity check: make sure the date is reasonable (between 1900 and 2100)
+                if (actualDate.Year >= 1900 && actualDate.Year <= 2100)
+                {
+                    return actualDate;
+                }
+            }
+            catch
+            {
+                // Fall through to string parsing if serial number conversion fails
+            }
+        }
+
+        // Try different date formats commonly found in CSV/Excel files
+        var formats = new[]
+        {
+            "yyyy-MM-dd",
+            "MM/dd/yyyy",
+            "dd/MM/yyyy",
+            "M/d/yyyy",
+            "d/M/yyyy",
+            "yyyy/MM/dd",
+            "dd-MM-yyyy",
+            "MM-dd-yyyy",
+            "yyyy.MM.dd",
+            "dd.MM.yyyy"
+        };
+
+        // Try parsing with invariant culture and common formats
+        foreach (var format in formats)
+        {
+            if (DateTime.TryParseExact(dateString, format, CultureInfo.InvariantCulture, DateTimeStyles.None, out var result))
+            {
+                return result;
+            }
+        }
+
+        // If exact format parsing fails, try general parsing with invariant culture
+        if (DateTime.TryParse(dateString, CultureInfo.InvariantCulture, DateTimeStyles.None, out var generalResult))
+        {
+            return generalResult;
+        }
+
+        // Last resort: try parsing with current culture
+        if (DateTime.TryParse(dateString, out var cultureResult))
+        {
+            return cultureResult;
+        }
+
+        return null;
     }
 
 }

@@ -9,7 +9,7 @@
         v-for="img in images"
         :key="img.imageID"
       >
-        <img :src="img.imageUrl" alt="product image" />
+        <img :src="getImageSrc(img)" alt="product image" />
         <Button
           icon="pi pi-trash"
           class="p-button-sm p-button-danger p-button-rounded"
@@ -20,13 +20,12 @@
 
     <!-- Компонент для загрузки с crop -->
     <div class="p-mt-3">
-      <ImageCropUpload :productId="productId" @uploaded="loadImages" />
+      <ImageCropUpload :productId="productId" @image-added="handleImageAdded" />
     </div>
   </div>
 </template>
 
 <script>
-import axios from 'axios'
 import Button from 'primevue/button'
 import ImageCropUpload from './ImageCropUpload.vue'
 
@@ -40,30 +39,34 @@ export default {
     productId: {
       type: Number,
       required: true
+    },
+    images: {
+      type: Array,
+      default: () => []
     }
-  },
-  data() {
-    return {
-      images: []
-    }
-  },
-  mounted() {
-    this.loadImages()
   },
   methods: {
-    loadImages() {
-      axios
-        .get(`https://localhost:7040/api/products/${this.productId}/images`)
-        .then(res => {
-          this.images = res.data
-        })
-    },
     deleteImage(imageId) {
       if (!confirm('Delete this image?')) return
-
-      axios
-        .delete(`https://localhost:7040/api/products/images/${imageId}`)
-        .then(() => this.loadImages())
+      // Emit event to parent to handle image deletion
+      this.$emit('image-deleted', imageId)
+    },
+    handleImageAdded(imageData) {
+      // Emit event to parent to handle image addition
+      this.$emit('image-added', imageData)
+    },
+    getImageSrc(img) {
+      // Handle base64 data (new format)
+      if (img.imageData) {
+        const contentType = img.contentType || 'image/jpeg'
+        return `data:${contentType};base64,${img.imageData}`
+      }
+      // Handle legacy imageUrl format (if any still exist)
+      if (img.imageUrl) {
+        return img.imageUrl
+      }
+      // Fallback placeholder
+      return 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTAwIiBoZWlnaHQ9IjEwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjZGRkIi8+PHRleHQgeD0iNTAlIiB5PSI1MCUiIGZvbnQtZmFtaWx5PSJBcmlhbCIgZm9udC1zaXplPSIxNCIgZmlsbD0iIzk5OSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZHk9Ii4zZW0iPk5vIEltYWdlPC90ZXh0Pjwvc3ZnPg=='
     }
   }
 }
