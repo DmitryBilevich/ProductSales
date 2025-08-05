@@ -123,11 +123,37 @@ data() {
     skuError: false,
     imageFiles: [],
     
+    // Import functionality
+    importSessionId: null,
+    importData: {
+      items: [],
+      totalCount: 0,
+      summary: {
+        totalRows: 0,
+        newProducts: 0,
+        updatedProducts: 0,
+        errorRows: 0,
+        lastModified: null
+      },
+      pageNumber: 1,
+      pageSize: 10,
+      sortField: 'RowNumber',
+      sortOrder: 1,
+      loading: false,
+      processing: false
+    },
+    uploadProgress: {
+      uploading: false,
+      message: ''
+    },
+    editingImportItems: {},
+    
     // Options
     viewOptions: [
       { label: 'Table View', value: 'table', icon: 'pi pi-table' },
       { label: 'Inline Edit', value: 'inline', icon: 'pi pi-pencil' },
-      { label: 'Tree View', value: 'tree', icon: 'pi pi-sitemap' }
+      { label: 'Tree View', value: 'tree', icon: 'pi pi-sitemap' },
+      { label: 'Load from File', value: 'import', icon: 'pi pi-upload' }
     ],
     
     categoryOptions: [
@@ -177,6 +203,9 @@ data() {
       } else if (newView === 'tree') {
         // Initialize tree view mode
         this.initializeTreeView()
+      } else if (newView === 'import') {
+        // Initialize import view mode
+        this.initializeImportView()
       }
     },
     
@@ -1207,6 +1236,303 @@ async saveProduct() {
       }
       
       return stockRanges
+    },
+    
+    // === IMPORT METHODS ===
+    
+    initializeImportView() {
+      // Use fixed session ID for single user
+      if (!this.importSessionId) {
+        this.importSessionId = '11111111-1111-1111-1111-111111111111'
+      }
+      
+      // Check if we have existing import data
+      this.loadImportData()
+    },
+    
+    async handleFileUpload(event) {
+      const file = event.target.files[0]
+      if (!file) return
+      
+      // Validate file type
+      const allowedTypes = ['.xlsx', '.xls', '.csv']
+      const fileExtension = '.' + file.name.split('.').pop().toLowerCase()
+      
+      if (!allowedTypes.includes(fileExtension)) {
+        alert('Please select an Excel (.xlsx, .xls) or CSV file')
+        return
+      }
+      
+      // Validate file size (5MB)
+      if (file.size > 5 * 1024 * 1024) {
+        alert('File size must be less than 5MB')
+        return
+      }
+      
+      this.uploadProgress.uploading = true
+      this.uploadProgress.message = 'Uploading and processing file...'
+      
+      try {
+        const formData = new FormData()
+        formData.append('file', file)
+        
+        const response = await axios.post('https://localhost:7040/api/products/upload-file', formData, {
+          headers: {
+            'Content-Type': 'multipart/form-data'
+          }
+        })
+        
+        if (response.data.success) {
+          // Set a fixed session ID since we only have one user
+          this.importSessionId = '11111111-1111-1111-1111-111111111111'
+          this.uploadProgress.message = response.data.message
+          await this.loadImportData()
+          alert(`File uploaded successfully! ${response.data.summary?.totalRows || 0} rows processed.`)
+        } else {
+          alert('Error: ' + response.data.message)
+        }
+      } catch (error) {
+        console.error('Upload error:', error)
+        alert('Failed to upload file: ' + (error.response?.data?.message || error.message))
+      } finally {
+        this.uploadProgress.uploading = false
+        this.uploadProgress.message = ''
+        // Clear file input
+        event.target.value = ''
+      }
+    },
+    
+    generateSessionId() {
+      // Temporary method - the backend should return the session ID
+      return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+        const r = Math.random() * 16 | 0
+        const v = c == 'x' ? r : (r & 0x3 | 0x8)
+        return v.toString(16)
+      })
+    },
+    
+    async loadImportData() {
+      if (!this.importSessionId) return
+      
+      this.importData.loading = true
+      
+      try {
+        const response = await axios.get(
+          `https://localhost:7040/api/products/import-staging/${this.importSessionId}`,
+          {
+            params: {
+              pageNumber: this.importData.pageNumber,
+              pageSize: this.importData.pageSize,
+              sortField: this.importData.sortField,
+              sortOrder: this.importData.sortOrder
+            }
+          }
+        )
+        
+        this.importData.items = response.data.items || []
+        this.importData.totalCount = response.data.totalCount || 0
+        this.importData.summary = response.data.summary || {}
+        
+      } catch (error) {
+        console.error('Error loading import data:', error)
+        if (error.response?.status === 404) {
+          // No import data found, reset session
+          this.importSessionId = null
+          this.importData.items = []
+          this.importData.totalCount = 0
+        } else {
+          alert('Failed to load import data: ' + (error.response?.data?.message || error.message))
+        }
+      } finally {
+        this.importData.loading = false
+      }
+    },
+    
+    onImportPage(event) {
+      this.importData.pageNumber = (event.page ?? 0) + 1
+      this.loadImportData()
+    },
+    
+    onImportSort(event) {
+      this.importData.sortField = event.sortField
+      this.importData.sortOrder = event.sortOrder
+      this.loadImportData()
+    },
+    
+    startImportEdit(item) {
+      this.editingImportItems[item.stagingID] = {
+        stagingID: item.stagingID,
+        sku: item.sku || '',
+        name: item.name || '',
+        category: item.category || '',
+        price: Number(item.price) || 0,
+        quantityInStock: Number(item.quantityInStock) || 0,
+        description: item.description || '',
+        saleStartDate: item.saleStartDate ? this.parseDateFromServer(item.saleStartDate) : null,
+        isEditing: true,
+        saving: false,
+        originalValues: { ...item }
+      }
+    },
+    
+    cancelImportEdit(stagingID) {
+      delete this.editingImportItems[stagingID]
+    },
+    
+    getImportEditingItem(item) {
+      return this.editingImportItems[item.stagingID] || item
+    },
+    
+    isImportItemEditing(stagingID) {
+      return this.editingImportItems[stagingID]?.isEditing || false
+    },
+    
+    async saveImportItem(stagingID) {
+      const item = this.editingImportItems[stagingID]
+      if (!item) return
+      
+      item.saving = true
+      
+      try {
+        const payload = {
+          stagingID: item.stagingID,
+          sku: item.sku,
+          name: item.name,
+          category: item.category,
+          price: item.price,
+          quantityInStock: item.quantityInStock,
+          description: item.description,
+          saleStartDate: this.formatDateForServer(item.saleStartDate)
+        }
+        
+        const response = await axios.put('https://localhost:7040/api/products/update-staging', payload)
+        
+        if (response.data.success) {
+          delete this.editingImportItems[stagingID]
+          await this.loadImportData()
+          alert('Item updated successfully')
+        } else {
+          alert('Error: ' + response.data.message)
+        }
+      } catch (error) {
+        console.error('Error saving import item:', error)
+        alert('Failed to save item: ' + (error.response?.data?.message || error.message))
+      } finally {
+        item.saving = false
+      }
+    },
+    
+    async deleteImportItem(stagingID) {
+      if (!confirm('Are you sure you want to delete this import item?')) {
+        return
+      }
+      
+      try {
+        const response = await axios.delete(`https://localhost:7040/api/products/delete-staging/${stagingID}`)
+        
+        if (response.data.success) {
+          await this.loadImportData()
+          alert('Item deleted successfully')
+        } else {
+          alert('Error: ' + response.data.message)
+        }
+      } catch (error) {
+        console.error('Error deleting import item:', error)
+        alert('Failed to delete item: ' + (error.response?.data?.message || error.message))
+      }
+    },
+    
+    async processImport() {
+      if (!this.importSessionId) return
+      
+      if (!confirm(`Are you sure you want to process ${this.importData.summary.totalRows} products? This action cannot be undone.`)) {
+        return
+      }
+      
+      if (this.importData.summary.errorRows > 0) {
+        alert(`Cannot process import: ${this.importData.summary.errorRows} rows have validation errors. Please fix them first.`)
+        return
+      }
+      
+      this.importData.processing = true
+      
+      try {
+        const response = await axios.post(`https://localhost:7040/api/products/process-import/${this.importSessionId}`)
+        
+        if (response.data.success) {
+          alert(`Import completed successfully! ${response.data.processedCount} products processed.`)
+          this.importData.items = []
+          this.importData.totalCount = 0
+          this.importData.summary = {
+            totalRows: 0,
+            newProducts: 0,
+            updatedProducts: 0,
+            errorRows: 0,
+            lastModified: null
+          }
+          // Refresh main product list
+          this.search()
+        } else {
+          alert('Error processing import: ' + response.data.message)
+        }
+      } catch (error) {
+        console.error('Error processing import:', error)
+        alert('Failed to process import: ' + (error.response?.data?.message || error.message))
+      } finally {
+        this.importData.processing = false
+      }
+    },
+    
+    async clearImport() {
+      if (!this.importSessionId) return
+      
+      if (!confirm('Are you sure you want to clear all import data? This action cannot be undone.')) {
+        return
+      }
+      
+      try {
+        const response = await axios.delete(`https://localhost:7040/api/products/clear-import/${this.importSessionId}`)
+        
+        if (response.data.success) {
+          alert('Import data cleared successfully')
+          this.importData.items = []
+          this.importData.totalCount = 0
+          this.importData.summary = {
+            totalRows: 0,
+            newProducts: 0,
+            updatedProducts: 0,
+            errorRows: 0,
+            lastModified: null
+          }
+        } else {
+          alert('Error clearing import: ' + response.data.message)
+        }
+      } catch (error) {
+        console.error('Error clearing import:', error)
+        alert('Failed to clear import: ' + (error.response?.data?.message || error.message))
+      }
+    },
+    
+    downloadTemplate() {
+      window.open('https://localhost:7040/api/products/download-template', '_blank')
+    },
+    
+    getImportOperationSeverity(operationType) {
+      return operationType === 'Insert' ? 'success' : 'info'
+    },
+    
+    getImportRowClass(data) {
+      const classes = ['import-row']
+      
+      if (data.validationErrors) {
+        classes.push('error-row')
+      }
+      
+      if (this.isImportItemEditing(data.stagingID)) {
+        classes.push('editing-row')
+      }
+      
+      return classes.join(' ')
     }
   }
 }

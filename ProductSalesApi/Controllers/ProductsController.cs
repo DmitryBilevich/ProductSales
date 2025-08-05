@@ -7,6 +7,9 @@ using ProductSalesApi.Dtos;
 using ProductSalesApi.Models;
 using System.Data;
 using System.Text.Json;
+using OfficeOpenXml;
+using System.Globalization;
+
 
 namespace ProductSalesApi.Controllers;
 
@@ -339,6 +342,499 @@ public class ProductsController : ControllerBase
         var reservedSku = await command.ExecuteScalarAsync();
 
         return Ok(new { sku = reservedSku?.ToString() });
+    }
+
+
+    // === BULK IMPORT METHODS ===
+
+    [HttpPost("upload-file")]
+    public async Task<ActionResult<ProductImportResultDto>> UploadProductFile(IFormFile file)
+    {
+        if (file == null || file.Length == 0)
+        {
+            return BadRequest(new ProductImportResultDto
+            {
+                Success = false,
+                Message = "No file uploaded"
+            });
+        }
+
+        // 5MB limit
+        if (file.Length > 5 * 1024 * 1024)
+        {
+            return BadRequest(new ProductImportResultDto
+            {
+                Success = false,
+                Message = "File size exceeds 5MB limit"
+            });
+        }
+
+        var allowedExtensions = new[] { ".xlsx", ".xls", ".csv" };
+        var fileExtension = Path.GetExtension(file.FileName).ToLowerInvariant();
+
+        if (!allowedExtensions.Contains(fileExtension))
+        {
+            return BadRequest(new ProductImportResultDto
+            {
+                Success = false,
+                Message = "Only Excel (.xlsx, .xls) and CSV files are supported"
+            });
+        }
+
+        try
+        {
+            // Use fixed session ID for single user scenario
+            var importSessionId = Guid.Parse("11111111-1111-1111-1111-111111111111");
+            var products = new List<ProductImportRowDto>();
+
+            using var stream = new MemoryStream();
+            await file.CopyToAsync(stream);
+            stream.Position = 0;
+
+            if (fileExtension == ".csv")
+            {
+                products = await ParseCsvFile(stream);
+            }
+            else
+            {
+                products = await ParseExcelFile(stream);
+            }
+
+            if (products.Count == 0)
+            {
+                return BadRequest(new ProductImportResultDto
+                {
+                    Success = false,
+                    Message = "No valid data found in file"
+                });
+            }
+
+            // Process the data in SQL
+            var result = await ProcessImportData(importSessionId, products);
+            result.Success = true;
+            result.Message = $"Successfully processed {products.Count} rows from file";
+            result.ImportSessionId = importSessionId;
+
+            return Ok(result);
+        }
+        catch (Exception ex)
+        {
+            return BadRequest(new ProductImportResultDto
+            {
+                Success = false,
+                Message = $"Error processing file: {ex.Message}"
+            });
+        }
+    }
+
+    [HttpDelete("delete-staging/{stagingId}")]
+    public async Task<ActionResult<ProductImportResultDto>> DeleteStagingItem(int stagingId)
+    {
+        using var connection = new SqlConnection(_connectionString);
+        await connection.OpenAsync();
+
+        using var command = new SqlCommand("DELETE FROM ProductImportStaging WHERE StagingID = @StagingID", connection);
+        command.Parameters.AddWithValue("@StagingID", stagingId);
+
+        var rowsAffected = await command.ExecuteNonQueryAsync();
+
+        if (rowsAffected > 0)
+        {
+            return Ok(new ProductImportResultDto
+            {
+                Success = true,
+                Message = "Import item deleted successfully",
+                ProcessedCount = 1
+            });
+        }
+        else
+        {
+            return NotFound(new ProductImportResultDto
+            {
+                Success = false,
+                Message = "Import item not found"
+            });
+        }
+    }
+
+
+    [HttpGet("import-staging/{importSessionId}")]
+    public async Task<ActionResult<ProductImportPagedResultDto>> GetImportStaging(
+        Guid importSessionId,
+        [FromQuery] int pageNumber = 1,
+        [FromQuery] int pageSize = 10,
+        [FromQuery] string? sortField = "RowNumber",
+        [FromQuery] int sortOrder = 1)
+    {
+        using var connection = new SqlConnection(_connectionString);
+        await connection.OpenAsync();
+
+        using var command = new SqlCommand("GetProductImportStaging", connection)
+        {
+            CommandType = CommandType.StoredProcedure
+        };
+
+        command.Parameters.AddWithValue("@ImportSessionID", importSessionId);
+        command.Parameters.AddWithValue("@PageNumber", pageNumber);
+        command.Parameters.AddWithValue("@PageSize", pageSize);
+        command.Parameters.AddWithValue("@SortField", sortField ?? "RowNumber");
+        command.Parameters.AddWithValue("@SortOrder", sortOrder);
+
+        var result = new ProductImportPagedResultDto();
+
+        using var reader = await command.ExecuteReaderAsync();
+
+        // Read staging items
+        while (await reader.ReadAsync())
+        {
+            var item = new ProductImportStagingDto
+            {
+                StagingID = reader.GetInt32("StagingID"),
+                OperationType = reader.GetString("OperationType"),
+                SKU = reader.IsDBNull("SKU") ? null : reader.GetString("SKU"),
+                Name = reader.GetString("Name"),
+                Category = reader.IsDBNull("Category") ? null : reader.GetString("Category"),
+                Price = reader.GetDecimal("Price"),
+                QuantityInStock = reader.GetInt32("QuantityInStock"),
+                Description = reader.IsDBNull("Description") ? null : reader.GetString("Description"),
+                SaleStartDate = reader.IsDBNull("SaleStartDate") ? null : reader.GetDateTime("SaleStartDate"),
+                ExistingProductID = reader.IsDBNull("ExistingProductID") ? null : reader.GetInt32("ExistingProductID"),
+                ValidationErrors = reader.IsDBNull("ValidationErrors") ? null : reader.GetString("ValidationErrors"),
+                RowNumber = reader.GetInt32("RowNumber"),
+                ModifiedAt = reader.GetDateTime("ModifiedAt"),
+                CurrentName = reader.IsDBNull("CurrentName") ? null : reader.GetString("CurrentName"),
+                CurrentCategory = reader.IsDBNull("CurrentCategory") ? null : reader.GetString("CurrentCategory"),
+                CurrentPrice = reader.IsDBNull("CurrentPrice") ? null : reader.GetDecimal("CurrentPrice"),
+                CurrentQuantityInStock = reader.IsDBNull("CurrentQuantityInStock") ? null : reader.GetInt32("CurrentQuantityInStock"),
+                CurrentDescription = reader.IsDBNull("CurrentDescription") ? null : reader.GetString("CurrentDescription"),
+                CurrentSaleStartDate = reader.IsDBNull("CurrentSaleStartDate") ? null : reader.GetDateTime("CurrentSaleStartDate")
+            };
+
+            result.Items.Add(item);
+        }
+
+        // Read total count
+        if (await reader.NextResultAsync() && await reader.ReadAsync())
+        {
+            result.TotalCount = reader.GetInt32("TotalCount");
+        }
+        else
+        {
+            result.TotalCount = 0;
+        }
+
+        // Read summary
+        if (await reader.NextResultAsync() && await reader.ReadAsync())
+        {
+            result.Summary = new ProductImportSummaryDto
+            {
+                TotalRows = reader.GetInt32("TotalRows"),
+                NewProducts = reader.GetInt32("NewProducts"),
+                UpdatedProducts = reader.GetInt32("UpdatedProducts"),
+                ErrorRows = reader.GetInt32("ErrorRows"),
+                LastModified = reader.IsDBNull("LastModified") ? null : reader.GetDateTime("LastModified")
+            };
+        }
+        else
+        {
+            result.Summary = new ProductImportSummaryDto
+            {
+                TotalRows = 0,
+                NewProducts = 0,
+                UpdatedProducts = 0,
+                ErrorRows = 0,
+                LastModified = null
+            };
+        }
+
+        return Ok(result);
+    }
+
+    [HttpPost("process-import/{importSessionId}")]
+    public async Task<ActionResult<ProductImportResultDto>> ProcessImport(Guid importSessionId)
+    {
+        using var connection = new SqlConnection(_connectionString);
+        await connection.OpenAsync();
+
+        using var command = new SqlCommand("ProcessFinalImport", connection)
+        {
+            CommandType = CommandType.StoredProcedure
+        };
+
+        command.Parameters.AddWithValue("@ImportSessionID", importSessionId);
+
+        using var reader = await command.ExecuteReaderAsync();
+
+        if (await reader.ReadAsync())
+        {
+            var result = new ProductImportResultDto
+            {
+                Success = reader.GetInt32("Success") == 1,
+                Message = reader.GetString(reader.GetBoolean("Success") ? "Message" : "ErrorMessage"),
+                ProcessedCount = reader.GetInt32("ProcessedCount")
+            };
+
+            return Ok(result);
+        }
+
+        return BadRequest(new ProductImportResultDto
+        {
+            Success = false,
+            Message = "Unexpected error processing import"
+        });
+    }
+
+    [HttpDelete("clear-import/{importSessionId}")]
+    public async Task<ActionResult<ProductImportResultDto>> ClearImport(Guid importSessionId)
+    {
+        using var connection = new SqlConnection(_connectionString);
+        await connection.OpenAsync();
+
+        using var command = new SqlCommand("ClearProductImportStaging", connection)
+        {
+            CommandType = CommandType.StoredProcedure
+        };
+
+        command.Parameters.AddWithValue("@ImportSessionID", importSessionId);
+
+        using var reader = await command.ExecuteReaderAsync();
+
+        if (await reader.ReadAsync())
+        {
+            var clearedCount = reader.GetInt32("ClearedCount");
+            var message = reader.GetString("Message");
+
+            return Ok(new ProductImportResultDto
+            {
+                Success = true,
+                Message = message,
+                ProcessedCount = clearedCount
+            });
+        }
+
+        return BadRequest(new ProductImportResultDto
+        {
+            Success = false,
+            Message = "Error clearing import data"
+        });
+    }
+
+    [HttpPut("update-staging")]
+    public async Task<ActionResult<ProductImportResultDto>> UpdateStagingItem([FromBody] ProductImportUpdateRequestDto request)
+    {
+        using var connection = new SqlConnection(_connectionString);
+        await connection.OpenAsync();
+
+        using var command = new SqlCommand("UpdateProductImportStaging", connection)
+        {
+            CommandType = CommandType.StoredProcedure
+        };
+
+        command.Parameters.AddWithValue("@StagingID", request.StagingID);
+        command.Parameters.AddWithValue("@SKU", (object?)request.SKU ?? DBNull.Value);
+        command.Parameters.AddWithValue("@Name", request.Name);
+        command.Parameters.AddWithValue("@Category", (object?)request.Category ?? DBNull.Value);
+        command.Parameters.AddWithValue("@Price", request.Price);
+        command.Parameters.AddWithValue("@QuantityInStock", request.QuantityInStock);
+        command.Parameters.AddWithValue("@Description", (object?)request.Description ?? DBNull.Value);
+        command.Parameters.AddWithValue("@SaleStartDate", (object?)request.SaleStartDate ?? DBNull.Value);
+
+        using var reader = await command.ExecuteReaderAsync();
+
+        if (await reader.ReadAsync())
+        {
+            var success = reader.GetInt32("Success") == 1;
+            var message = reader.GetString("Message");
+
+            return Ok(new ProductImportResultDto
+            {
+                Success = success,
+                Message = message,
+                ProcessedCount = success ? 1 : 0
+            });
+        }
+
+        return BadRequest(new ProductImportResultDto
+        {
+            Success = false,
+            Message = "Error updating staging item"
+        });
+    }
+
+    [HttpGet("download-template")]
+    public IActionResult DownloadTemplate()
+    {
+        var filePath = Path.Combine(_env.WebRootPath, "templates", "product-import-template.csv");
+
+        if (!System.IO.File.Exists(filePath))
+        {
+            return NotFound("Template file not found");
+        }
+
+        var fileBytes = System.IO.File.ReadAllBytes(filePath);
+        return File(fileBytes, "text/csv", "product-import-template.csv");
+    }
+
+    // === HELPER METHODS ===
+
+    private async Task<List<ProductImportRowDto>> ParseCsvFile(MemoryStream stream)
+    {
+        var products = new List<ProductImportRowDto>();
+        stream.Position = 0;
+
+        using var reader = new StreamReader(stream);
+        var headerLine = await reader.ReadLineAsync();
+
+        if (string.IsNullOrEmpty(headerLine))
+            return products;
+
+        var headers = headerLine.Split(',').Select(h => h.Trim().Trim('"')).ToArray();
+        var rowNumber = 1; // Start from 1 (header is row 0)
+
+        string? line;
+        while ((line = await reader.ReadLineAsync()) != null)
+        {
+            rowNumber++;
+            if (string.IsNullOrWhiteSpace(line)) continue;
+
+            var values = line.Split(',').Select(v => v.Trim().Trim('"')).ToArray();
+
+            var product = new ProductImportRowDto
+            {
+                RowNumber = rowNumber,
+                Sku = GetColumnValue(headers, values, "SKU"),
+                Name = GetColumnValue(headers, values, "Name") ?? "",
+                Category = GetColumnValue(headers, values, "Category"),
+                Price = GetColumnValue(headers, values, "Price") ?? "0",
+                QuantityInStock = GetColumnValue(headers, values, "QuantityInStock") ?? "0",
+                Description = GetColumnValue(headers, values, "Description"),
+                SaleStartDate = GetColumnValue(headers, values, "SaleStartDate")
+            };
+
+            if (!string.IsNullOrEmpty(product.Name))
+            {
+                products.Add(product);
+            }
+        }
+
+        return products;
+    }
+
+    private async Task<List<ProductImportRowDto>> ParseExcelFile(MemoryStream stream)
+    {
+        var products = new List<ProductImportRowDto>();
+
+        ExcelPackage.LicenseContext = LicenseContext.NonCommercial;
+
+        using var package = new ExcelPackage(stream);
+        var worksheet = package.Workbook.Worksheets.FirstOrDefault();
+
+        if (worksheet == null || worksheet.Dimension == null)
+            return products;
+
+        var rowCount = worksheet.Dimension.Rows;
+        var colCount = worksheet.Dimension.Columns;
+
+        // Read headers from first row
+        var headers = new Dictionary<string, int>();
+        for (int col = 1; col <= colCount; col++)
+        {
+            var header = worksheet.Cells[1, col].Value?.ToString()?.Trim();
+            if (!string.IsNullOrEmpty(header))
+            {
+                headers[header] = col;
+            }
+        }
+
+        // Read data rows
+        for (int row = 2; row <= rowCount; row++)
+        {
+            var name = GetExcelColumnValue(worksheet, row, headers, "Name");
+
+            if (string.IsNullOrEmpty(name)) continue;
+
+            var product = new ProductImportRowDto
+            {
+                RowNumber = row,
+                Sku = GetExcelColumnValue(worksheet, row, headers, "SKU"),
+                Name = name,
+                Category = GetExcelColumnValue(worksheet, row, headers, "Category"),
+                Price = GetExcelColumnValue(worksheet, row, headers, "Price") ?? "0",
+                QuantityInStock = GetExcelColumnValue(worksheet, row, headers, "QuantityInStock") ?? "0",
+                Description = GetExcelColumnValue(worksheet, row, headers, "Description"),
+                SaleStartDate = GetExcelColumnValue(worksheet, row, headers, "SaleStartDate")
+            };
+
+            products.Add(product);
+        }
+
+        return products;
+    }
+
+    private string? GetColumnValue(string[] headers, string[] values, string columnName)
+    {
+        var index = Array.FindIndex(headers, h => string.Equals(h, columnName, StringComparison.OrdinalIgnoreCase));
+
+        if (index >= 0 && index < values.Length)
+        {
+            var value = values[index];
+            return string.IsNullOrWhiteSpace(value) ? null : value;
+        }
+
+        return null;
+    }
+
+    private string? GetExcelColumnValue(ExcelWorksheet worksheet, int row, Dictionary<string, int> headers, string columnName)
+    {
+        if (headers.TryGetValue(columnName, out int col))
+        {
+            var cellValue = worksheet.Cells[row, col].Value;
+
+            if (cellValue is DateTime dateValue && columnName == "SaleStartDate")
+            {
+                return dateValue.ToString("yyyy-MM-dd");
+            }
+
+            return cellValue?.ToString()?.Trim();
+        }
+
+        return null;
+    }
+
+    private async Task<ProductImportResultDto> ProcessImportData(Guid importSessionId, List<ProductImportRowDto> products)
+    {
+        var json = JsonSerializer.Serialize(products, new JsonSerializerOptions
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+        });
+
+        using var connection = new SqlConnection(_connectionString);
+        await connection.OpenAsync();
+
+        using var command = new SqlCommand("ProcessProductImportData", connection)
+        {
+            CommandType = CommandType.StoredProcedure
+        };
+
+        command.Parameters.AddWithValue("@ImportSessionID", importSessionId);
+        command.Parameters.AddWithValue("@ImportData", json);
+
+        using var reader = await command.ExecuteReaderAsync();
+
+        var result = new ProductImportResultDto { Success = true };
+
+        if (await reader.ReadAsync())
+        {
+            result.Summary = new ProductImportSummaryDto
+            {
+                TotalRows = reader.GetInt32("TotalRows"),
+                NewProducts = reader.GetInt32("NewProducts"),
+                UpdatedProducts = reader.GetInt32("UpdatedProducts"),
+                ErrorRows = reader.GetInt32("ErrorRows")
+            };
+        }
+
+        return result;
     }
 
 

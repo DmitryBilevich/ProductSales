@@ -1,0 +1,4 @@
+SKU,Name,Category,Price,QuantityInStock,Description,SaleStartDate
+SKU001,Sample Product 1,Electronics,29.99,100,This is a sample product description,2025-08-05
+SKU002,Sample Product 2,Furniture,149.99,50,Another sample product,
+,Sample Product 3,Accessories,9.99,200,Product without SKU will be matched by name,2025-09-01

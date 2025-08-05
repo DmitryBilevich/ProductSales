@@ -547,8 +547,341 @@
     </div>
   </div>
 
+  <!-- Import View -->
+  <div v-if="currentView === 'import'" class="import-view-container">
+    <div class="import-layout">
+      <!-- Import Summary Card -->
+      <Card class="import-summary-card">
+        <template #title>
+          <div class="import-header">
+            <i class="pi pi-upload mr-2"></i>
+            <span>Bulk Product Import</span>
+          </div>
+        </template>
+        
+        <template #content>
+          <!-- File Upload Section -->
+          <div v-if="!importSessionId" class="upload-section">
+            <div class="upload-instructions">
+              <h3>Import Products from File</h3>
+              <p>Upload an Excel (.xlsx, .xls) or CSV file to bulk import/update products.</p>
+              
+              <div class="upload-steps">
+                <div class="step">
+                  <i class="pi pi-download step-icon"></i>
+                  <span>1. Download template file</span>
+                  <Button 
+                    label="Download Template" 
+                    icon="pi pi-download" 
+                    @click="downloadTemplate"
+                    class="p-button-outlined p-button-sm ml-2"
+                  />
+                </div>
+                <div class="step">
+                  <i class="pi pi-file-edit step-icon"></i>
+                  <span>2. Fill in your product data</span>
+                </div>
+                <div class="step">
+                  <i class="pi pi-upload step-icon"></i>
+                  <span>3. Upload the completed file</span>
+                </div>
+              </div>
+            </div>
+            
+            <div class="file-upload-zone">
+              <input 
+                type="file" 
+                ref="fileInput"
+                accept=".xlsx,.xls,.csv" 
+                @change="handleFileUpload"
+                style="display: none"
+              />
+              <Button 
+                label="Choose File" 
+                icon="pi pi-upload" 
+                @click="$refs.fileInput.click()"
+                class="p-button-success p-button-lg"
+                :loading="uploadProgress.uploading"
+              />
+              <p class="upload-note">Maximum file size: 5MB</p>
+              <p v-if="uploadProgress.message" class="upload-message">{{ uploadProgress.message }}</p>
+            </div>
+          </div>
+          
+          <!-- Import Summary -->
+          <div v-else class="import-summary">
+            <div class="summary-stats">
+              <div class="stat-item">
+                <div class="stat-value">{{ importData.summary.totalRows }}</div>
+                <div class="stat-label">Total Rows</div>
+              </div>
+              <div class="stat-item success">
+                <div class="stat-value">{{ importData.summary.newProducts }}</div>
+                <div class="stat-label">New Products</div>
+              </div>
+              <div class="stat-item info">
+                <div class="stat-value">{{ importData.summary.updatedProducts }}</div>
+                <div class="stat-label">Updates</div>
+              </div>
+              <div class="stat-item" :class="{ 'error': importData.summary.errorRows > 0 }">
+                <div class="stat-value">{{ importData.summary.errorRows }}</div>
+                <div class="stat-label">Errors</div>
+              </div>
+            </div>
+            
+            <div class="import-actions">
+              <Button 
+                label="Process Import" 
+                icon="pi pi-check" 
+                @click="processImport"
+                class="p-button-success"
+                :disabled="importData.summary.errorRows > 0 || importData.processing"
+                :loading="importData.processing"
+              />
+              <Button 
+                label="Clear Import" 
+                icon="pi pi-times" 
+                @click="clearImport"
+                class="p-button-danger p-button-outlined ml-2"
+              />
+              <Button 
+                label="Upload New File" 
+                icon="pi pi-upload" 
+                @click="importSessionId = null"
+                class="p-button-outlined ml-2"
+              />
+            </div>
+          </div>
+        </template>
+      </Card>
+      
+      <!-- Import Data Table -->
+      <Card v-if="importSessionId" class="import-data-card">
+        <template #title>
+          <div class="table-header">
+            <div class="table-info">
+              <span class="table-title">Import Preview</span>
+              <Tag v-if="importData.totalCount" :value="`${importData.totalCount} items`" class="ml-2" />
+            </div>
+          </div>
+        </template>
+        
+        <template #content>
+          <DataTable
+            :value="importData.items"
+            :lazy="true"
+            :paginator="true"
+            :rows="importData.pageSize"
+            :totalRecords="importData.totalCount"
+            :first="(importData.pageNumber - 1) * importData.pageSize"
+            :loading="importData.loading"
+            @page="onImportPage"
+            responsiveLayout="scroll"
+            :sortField="importData.sortField"
+            :sortOrder="importData.sortOrder"
+            @sort="onImportSort"
+            stripedRows
+            class="import-table"
+            :rowClass="getImportRowClass"
+            paginatorTemplate="FirstPageLink PrevPageLink PageLinks NextPageLink LastPageLink CurrentPageReport RowsPerPageDropdown"
+            currentPageReportTemplate="Showing {first} to {last} of {totalRecords} items"
+          >
+            <Column field="rowNumber" header="Row" sortable style="width: 80px">
+              <template #body="slotProps">
+                <span class="row-number">{{ slotProps.data.rowNumber }}</span>
+              </template>
+            </Column>
+            
+            <Column field="operationType" header="Operation" sortable style="width: 100px">
+              <template #body="slotProps">
+                <Tag 
+                  :value="slotProps.data.operationType" 
+                  :severity="getImportOperationSeverity(slotProps.data.operationType)"
+                />
+              </template>
+            </Column>
+            
+            <Column field="sku" header="SKU" sortable style="min-width: 120px">
+              <template #body="slotProps">
+                <div v-if="isImportItemEditing(slotProps.data.stagingID)" class="inline-edit-cell">
+                  <InputText
+                    v-model="editingImportItems[slotProps.data.stagingID].sku"
+                    placeholder="SKU"
+                    class="inline-input"
+                    :disabled="editingImportItems[slotProps.data.stagingID]?.saving"
+                  />
+                </div>
+                <div v-else>
+                  <span class="sku-text">{{ slotProps.data.sku || 'Not set' }}</span>
+                </div>
+              </template>
+            </Column>
+            
+            <Column field="name" header="Name" sortable style="min-width: 200px">
+              <template #body="slotProps">
+                <div v-if="isImportItemEditing(slotProps.data.stagingID)" class="inline-edit-cell">
+                  <InputText
+                    v-model="editingImportItems[slotProps.data.stagingID].name"
+                    placeholder="Product name"
+                    class="inline-input"
+                    :disabled="editingImportItems[slotProps.data.stagingID]?.saving"
+                  />
+                </div>
+                <div v-else class="name-cell">
+                  <span class="product-name">{{ slotProps.data.name }}</span>
+                  <div v-if="slotProps.data.operationType === 'Update' && slotProps.data.currentName !== slotProps.data.name" class="change-indicator">
+                    <small class="current-value">Current: {{ slotProps.data.currentName }}</small>
+                  </div>
+                </div>
+              </template>
+            </Column>
+            
+            <Column field="category" header="Category" sortable style="min-width: 120px">
+              <template #body="slotProps">
+                <div v-if="isImportItemEditing(slotProps.data.stagingID)" class="inline-edit-cell">
+                  <Dropdown
+                    v-model="editingImportItems[slotProps.data.stagingID].category"
+                    :options="categoryOptions"
+                    placeholder="Select category"
+                    class="inline-input"
+                    showClear
+                    editable
+                    :disabled="editingImportItems[slotProps.data.stagingID]?.saving"
+                  />
+                </div>
+                <div v-else>
+                  <Tag :value="slotProps.data.category || 'Not set'" class="category-tag" />
+                  <div v-if="slotProps.data.operationType === 'Update' && slotProps.data.currentCategory !== slotProps.data.category" class="change-indicator">
+                    <small class="current-value">Current: {{ slotProps.data.currentCategory }}</small>
+                  </div>
+                </div>
+              </template>
+            </Column>
+            
+            <Column field="price" header="Price" sortable style="min-width: 100px">
+              <template #body="slotProps">
+                <div v-if="isImportItemEditing(slotProps.data.stagingID)" class="inline-edit-cell">
+                  <InputNumber
+                    v-model="editingImportItems[slotProps.data.stagingID].price"
+                    :min="0"
+                    :maxFractionDigits="2"
+                    mode="currency"
+                    currency="USD"
+                    class="inline-input"
+                    :disabled="editingImportItems[slotProps.data.stagingID]?.saving"
+                  />
+                </div>
+                <div v-else>
+                  <span class="price-text">${{ Number(slotProps.data.price).toFixed(2) }}</span>
+                  <div v-if="slotProps.data.operationType === 'Update' && slotProps.data.currentPrice !== slotProps.data.price" class="change-indicator">
+                    <small class="current-value">Current: ${{ Number(slotProps.data.currentPrice).toFixed(2) }}</small>
+                  </div>
+                </div>
+              </template>
+            </Column>
+            
+            <Column field="quantityInStock" header="Stock" sortable style="min-width: 100px">
+              <template #body="slotProps">
+                <div v-if="isImportItemEditing(slotProps.data.stagingID)" class="inline-edit-cell">
+                  <InputNumber
+                    v-model="editingImportItems[slotProps.data.stagingID].quantityInStock"
+                    :min="0"
+                    class="inline-input"
+                    :disabled="editingImportItems[slotProps.data.stagingID]?.saving"
+                  />
+                </div>
+                <div v-else>
+                  <Tag 
+                    :value="slotProps.data.quantityInStock" 
+                    :severity="getStockSeverity(slotProps.data.quantityInStock)"
+                  />
+                  <div v-if="slotProps.data.operationType === 'Update' && slotProps.data.currentQuantityInStock !== slotProps.data.quantityInStock" class="change-indicator">
+                    <small class="current-value">Current: {{ slotProps.data.currentQuantityInStock }}</small>
+                  </div>
+                </div>
+              </template>
+            </Column>
+            
+            <Column field="saleStartDate" header="Sale Start Date" sortable style="min-width: 120px">
+              <template #body="slotProps">
+                <div v-if="isImportItemEditing(slotProps.data.stagingID)" class="inline-edit-cell">
+                  <Calendar
+                    v-model="editingImportItems[slotProps.data.stagingID].saleStartDate"
+                    placeholder="Select date"
+                    dateFormat="mm/dd/yy"
+                    showIcon
+                    class="inline-input"
+                    :disabled="editingImportItems[slotProps.data.stagingID]?.saving"
+                  />
+                </div>
+                <div v-else class="date-cell">
+                  <span v-if="slotProps.data.saleStartDate" class="date-text">
+                    {{ formatDate(slotProps.data.saleStartDate) }}
+                  </span>
+                  <span v-else class="no-date-text">Not set</span>
+                  <div v-if="slotProps.data.operationType === 'Update' && slotProps.data.currentSaleStartDate !== slotProps.data.saleStartDate" class="change-indicator">
+                    <small class="current-value">Current: {{ formatDate(slotProps.data.currentSaleStartDate) }}</small>
+                  </div>
+                </div>
+              </template>
+            </Column>
+            
+            <Column header="Validation" style="min-width: 150px">
+              <template #body="slotProps">
+                <div v-if="slotProps.data.validationErrors" class="validation-errors">
+                  <Tag value="Error" severity="danger" />
+                  <small class="error-message">{{ slotProps.data.validationErrors }}</small>
+                </div>
+                <div v-else class="validation-success">
+                  <Tag value="Valid" severity="success" />
+                </div>
+              </template>
+            </Column>
+            
+            <Column header="Actions" style="width: 120px" :exportable="false">
+              <template #body="slotProps">
+                <div class="action-buttons">
+                  <template v-if="isImportItemEditing(slotProps.data.stagingID)">
+                    <Button 
+                      icon="pi pi-save" 
+                      class="p-button-text p-button-sm action-btn"
+                      @click="saveImportItem(slotProps.data.stagingID)"
+                      title="Save Changes"
+                      :loading="editingImportItems[slotProps.data.stagingID]?.saving"
+                    />
+                    <Button 
+                      icon="pi pi-times" 
+                      class="p-button-rounded p-button-text p-button-sm p-button-danger action-btn"
+                      @click="cancelImportEdit(slotProps.data.stagingID)"
+                      title="Cancel Edit"
+                      :disabled="editingImportItems[slotProps.data.stagingID]?.saving"
+                    />
+                  </template>
+                  <template v-else>
+                    <Button 
+                      icon="pi pi-pencil" 
+                      class="p-button-rounded p-button-text p-button-sm action-btn" 
+                      @click="startImportEdit(slotProps.data)"
+                      title="Edit"
+                    />
+                    <Button 
+                      icon="pi pi-trash" 
+                      class="p-button-rounded p-button-text p-button-sm p-button-danger action-btn"
+                      @click="deleteImportItem(slotProps.data.stagingID)"
+                      title="Delete"
+                    />
+                  </template>
+                </div>
+              </template>
+            </Column>
+          </DataTable>
+        </template>
+      </Card>
+    </div>
+  </div>
+
   <!-- Products Table -->
-  <Card v-if="currentView !== 'tree'" class="products-table-card">
+  <Card v-if="currentView !== 'tree' && currentView !== 'import'" class="products-table-card">
     <template #title>
       <div class="table-header">
         <div class="table-info">

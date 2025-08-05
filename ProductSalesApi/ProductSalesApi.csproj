@@ -7,6 +7,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="EPPlus" Version="8.0.8" />
     <PackageReference Include="Microsoft.Data.SqlClient" Version="6.1.0" />
     <PackageReference Include="Microsoft.EntityFrameworkCore" Version="9.0.7" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="9.0.7" />
@@ -19,6 +20,7 @@
 
   <ItemGroup>
     <Folder Include="wwwroot\images\products\" />
+    <Folder Include="wwwroot\templates\" />
   </ItemGroup>
 
 </Project>
