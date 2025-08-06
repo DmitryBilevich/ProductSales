@@ -1,4 +1,0 @@
-CREATE TYPE [dbo].[ProductIDList] AS TABLE(
-	[ProductID] [int] NULL
-)
-GO

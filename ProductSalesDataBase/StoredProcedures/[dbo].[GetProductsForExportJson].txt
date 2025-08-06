@@ -1,0 +1,97 @@
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+-- =============================================
+-- Stored Procedure: GetProductsForExportJson
+-- Description: Get products for export with JSON input and JSON output
+-- =============================================
+
+CREATE   PROCEDURE [dbo].[GetProductsForExportJson]
+    @JsonInput NVARCHAR(MAX)
+AS
+BEGIN
+    SET NOCOUNT ON;
+    
+    -- Parse JSON input parameters
+    DECLARE @ExportType NVARCHAR(50) = JSON_VALUE(@JsonInput, '$.exportType')
+    DECLARE @SelectedCategory NVARCHAR(100) = JSON_VALUE(@JsonInput, '$.selectedCategory')
+    DECLARE @Name NVARCHAR(255) = JSON_VALUE(@JsonInput, '$.name')
+    DECLARE @Sku NVARCHAR(100) = JSON_VALUE(@JsonInput, '$.sku')
+    DECLARE @PriceMin DECIMAL(10,2) = TRY_CAST(JSON_VALUE(@JsonInput, '$.priceMin') AS DECIMAL(10,2))
+    DECLARE @PriceMax DECIMAL(10,2) = TRY_CAST(JSON_VALUE(@JsonInput, '$.priceMax') AS DECIMAL(10,2))
+    DECLARE @StockMin INT = TRY_CAST(JSON_VALUE(@JsonInput, '$.stockMin') AS INT)
+    DECLARE @StockMax INT = TRY_CAST(JSON_VALUE(@JsonInput, '$.stockMax') AS INT)
+    DECLARE @SaleStartDateMin DATETIME2 = TRY_CAST(JSON_VALUE(@JsonInput, '$.saleStartDateMin') AS DATETIME2)
+    DECLARE @SaleStartDateMax DATETIME2 = TRY_CAST(JSON_VALUE(@JsonInput, '$.saleStartDateMax') AS DATETIME2)
+
+    -- Parse categories array from JSON into temp table
+    CREATE TABLE #Categories (Category NVARCHAR(100))
+    INSERT INTO #Categories (Category)
+    SELECT value
+    FROM OPENJSON(@JsonInput, '$.categories')
+
+    -- Parse stock ranges array from JSON into temp table
+    CREATE TABLE #StockRanges (MinStock INT, MaxStock INT)
+    INSERT INTO #StockRanges (MinStock, MaxStock)
+    SELECT 
+        TRY_CAST(JSON_VALUE(value, '$.min') AS INT),
+        TRY_CAST(JSON_VALUE(value, '$.max') AS INT)
+    FROM OPENJSON(@JsonInput, '$.stockRanges')
+
+    -- Get products based on export type
+    IF @ExportType = 'tree'
+    BEGIN
+        -- Tree export - filter by selected category only
+        SELECT (
+            SELECT 
+                p.SKU as sku,
+                p.Name as name,
+                p.Category as category,
+                p.Price as price,
+                p.QuantityInStock as quantityInStock,
+                p.Description as description,
+                p.SaleStartDate as saleStartDate,
+                p.CreatedAt as createdAt
+            FROM Products p
+            WHERE (@SelectedCategory IS NULL OR @SelectedCategory = '' OR p.Category = @SelectedCategory)
+            ORDER BY p.Name
+            FOR JSON PATH
+        ) as JsonResult
+    END
+    ELSE
+    BEGIN
+        -- Table/filtered export - use all filters
+        SELECT (
+            SELECT 
+                p.SKU as sku,
+                p.Name as name,
+                p.Category as category,
+                p.Price as price,
+                p.QuantityInStock as quantityInStock,
+                p.Description as description,
+                p.SaleStartDate as saleStartDate,
+                p.CreatedAt as createdAt
+            FROM Products p
+            WHERE 1=1
+                AND (@Name IS NULL OR @Name = '' OR p.Name LIKE '%' + @Name + '%')
+                AND (@Sku IS NULL OR @Sku = '' OR p.SKU LIKE '%' + @Sku + '%')
+                AND (NOT EXISTS(SELECT 1 FROM #Categories) OR p.Category IN (SELECT Category FROM #Categories))
+                AND (@PriceMin IS NULL OR p.Price >= @PriceMin)
+                AND (@PriceMax IS NULL OR p.Price <= @PriceMax)
+                AND (@StockMin IS NULL OR p.QuantityInStock >= @StockMin)
+                AND (@StockMax IS NULL OR p.QuantityInStock <= @StockMax)
+                AND (@SaleStartDateMin IS NULL OR p.SaleStartDate >= @SaleStartDateMin)
+                AND (@SaleStartDateMax IS NULL OR p.SaleStartDate <= @SaleStartDateMax)
+                AND (NOT EXISTS(SELECT 1 FROM #StockRanges) OR 
+                     EXISTS(SELECT 1 FROM #StockRanges sr WHERE p.QuantityInStock >= sr.MinStock AND p.QuantityInStock <= sr.MaxStock))
+            ORDER BY p.Name
+            FOR JSON PATH
+        ) as JsonResult
+    END
+
+    -- Cleanup temp tables
+    DROP TABLE #Categories
+    DROP TABLE #StockRanges
+END
+GO

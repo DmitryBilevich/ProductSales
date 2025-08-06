@@ -1,0 +1,81 @@
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+-- =============================================
+-- Stored Procedure: GetImportStagingDataJson
+-- Description: Get import staging data with JSON input and JSON output
+-- =============================================
+
+CREATE   PROCEDURE [dbo].[GetImportStagingDataJson]
+    @JsonInput NVARCHAR(MAX)
+AS
+BEGIN
+    SET NOCOUNT ON;
+    
+    -- Parse JSON input parameters
+    DECLARE @ImportSessionId UNIQUEIDENTIFIER = TRY_CAST(JSON_VALUE(@JsonInput, '$.importSessionId') AS UNIQUEIDENTIFIER)
+    DECLARE @PageNumber INT = ISNULL(TRY_CAST(JSON_VALUE(@JsonInput, '$.pageNumber') AS INT), 1)
+    DECLARE @PageSize INT = ISNULL(TRY_CAST(JSON_VALUE(@JsonInput, '$.pageSize') AS INT), 1000)
+    
+    -- Validate input
+    IF @ImportSessionId IS NULL
+    BEGIN
+        SELECT (
+            SELECT 
+                0 as success,
+                'Import session ID is required' as message,
+                NULL as items,
+                0 as totalCount
+            FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
+        ) as JsonResult
+        RETURN
+    END
+    
+    -- Calculate offset for pagination
+    DECLARE @Offset INT = (@PageNumber - 1) * @PageSize
+    
+    -- Get total count
+    DECLARE @TotalCount INT
+    SELECT @TotalCount = COUNT(*)
+    FROM ProductImportStaging 
+    WHERE ImportSessionId = @ImportSessionId
+    
+    -- Get staging data with pagination
+    SELECT (
+        SELECT 
+            (
+                SELECT 
+                    pis.StagingId as stagingId,
+                    pis.RowNumber as rowNumber,
+                    pis.SKU as sku,
+                    pis.Name as name,
+                    pis.Category as category,
+                    pis.Price as price,
+                    pis.QuantityInStock as quantityInStock,
+                    pis.Description as description,
+                    pis.SaleStartDate as saleStartDate,
+                    pis.OperationType as operationType,
+                    pis.ValidationErrors as validationErrors,
+                    CASE 
+                        WHEN pis.ValidationErrors IS NOT NULL THEN 'Error'
+                        WHEN pis.OperationType = 'Update' THEN 'Update'
+                        ELSE 'Insert'
+                    END as status
+                FROM ProductImportStaging pis
+                WHERE pis.ImportSessionId = @ImportSessionId
+                ORDER BY pis.RowNumber
+                OFFSET @Offset ROWS
+                FETCH NEXT @PageSize ROWS ONLY
+                FOR JSON PATH
+            ) as items,
+            @TotalCount as totalCount,
+            @PageNumber as pageNumber,
+            @PageSize as pageSize,
+            CEILING(CAST(@TotalCount AS FLOAT) / @PageSize) as totalPages,
+            1 as success,
+            'Staging data retrieved successfully' as message
+        FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
+    ) as JsonResult
+END
+GO
