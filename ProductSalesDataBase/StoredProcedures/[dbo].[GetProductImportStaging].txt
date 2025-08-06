@@ -1,0 +1,75 @@
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+CREATE PROCEDURE [dbo].[GetProductImportStaging]
+    @ImportSessionID UNIQUEIDENTIFIER,
+    @PageNumber INT = 1,
+    @PageSize INT = 10,
+    @SortField NVARCHAR(100) = 'RowNumber',
+    @SortOrder INT = 1
+AS
+BEGIN
+    SET NOCOUNT ON;
+    
+    IF @PageNumber < 1 SET @PageNumber = 1;
+    IF @PageSize < 1 SET @PageSize = 10;
+    
+    DECLARE @StartRow INT = (@PageNumber - 1) * @PageSize;
+    
+    -- Get staging data with pagination and sorting
+    SELECT 
+        s.StagingID,
+        s.OperationType,
+        s.SKU,
+        s.Name,
+        s.Category,  
+        s.Price,
+        s.QuantityInStock,
+        s.Description,
+        s.SaleStartDate,
+        s.ExistingProductID,
+        s.ValidationErrors,
+        s.RowNumber,
+        s.ModifiedAt,
+        -- For updates, show current values from existing product
+        CASE WHEN s.OperationType = 'Update' THEN p.Name ELSE NULL END as CurrentName,
+        CASE WHEN s.OperationType = 'Update' THEN p.Category ELSE NULL END as CurrentCategory,
+        CASE WHEN s.OperationType = 'Update' THEN p.Price ELSE NULL END as CurrentPrice,
+        CASE WHEN s.OperationType = 'Update' THEN p.QuantityInStock ELSE NULL END as CurrentQuantityInStock,
+        CASE WHEN s.OperationType = 'Update' THEN p.Description ELSE NULL END as CurrentDescription,
+        CASE WHEN s.OperationType = 'Update' THEN p.SaleStartDate ELSE NULL END as CurrentSaleStartDate
+    FROM ProductImportStaging s
+    LEFT JOIN Products p ON s.ExistingProductID = p.ProductID
+    WHERE s.ImportSessionID = @ImportSessionID
+    ORDER BY
+        CASE WHEN @SortField = 'RowNumber' AND @SortOrder = 1 THEN s.RowNumber END ASC,
+        CASE WHEN @SortField = 'RowNumber' AND @SortOrder = -1 THEN s.RowNumber END DESC,
+        CASE WHEN @SortField = 'OperationType' AND @SortOrder = 1 THEN s.OperationType END ASC,
+        CASE WHEN @SortField = 'OperationType' AND @SortOrder = -1 THEN s.OperationType END DESC,
+        CASE WHEN @SortField = 'Name' AND @SortOrder = 1 THEN s.Name END ASC,
+        CASE WHEN @SortField = 'Name' AND @SortOrder = -1 THEN s.Name END DESC,
+        CASE WHEN @SortField = 'SKU' AND @SortOrder = 1 THEN s.SKU END ASC,
+        CASE WHEN @SortField = 'SKU' AND @SortOrder = -1 THEN s.SKU END DESC,
+        CASE WHEN @SortField = 'Category' AND @SortOrder = 1 THEN s.Category END ASC,
+        CASE WHEN @SortField = 'Category' AND @SortOrder = -1 THEN s.Category END DESC,
+        CASE WHEN @SortField = 'Price' AND @SortOrder = 1 THEN s.Price END ASC,
+        CASE WHEN @SortField = 'Price' AND @SortOrder = -1 THEN s.Price END DESC
+    OFFSET @StartRow ROWS FETCH NEXT @PageSize ROWS ONLY;
+    
+    -- Get total count (always returns one row)
+    SELECT ISNULL(COUNT(*), 0) as TotalCount
+    FROM ProductImportStaging s
+    WHERE s.ImportSessionID = @ImportSessionID;
+    
+    -- Get summary statistics (always returns one row)
+    SELECT 
+        ISNULL(COUNT(*), 0) as TotalRows,
+        ISNULL(SUM(CASE WHEN OperationType = 'Insert' THEN 1 ELSE 0 END), 0) as NewProducts,
+        ISNULL(SUM(CASE WHEN OperationType = 'Update' THEN 1 ELSE 0 END), 0) as UpdatedProducts,
+        ISNULL(SUM(CASE WHEN ValidationErrors IS NOT NULL THEN 1 ELSE 0 END), 0) as ErrorRows,
+        MAX(ModifiedAt) as LastModified
+    FROM ProductImportStaging 
+    WHERE ImportSessionID = @ImportSessionID;
+END
+GO

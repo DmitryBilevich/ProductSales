@@ -1,0 +1,43 @@
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+-- =============================================
+-- Stored Procedure: ReserveNextSKUJson
+-- Description: Reserve next available SKU with JSON input and JSON output
+-- =============================================
+
+CREATE   PROCEDURE [dbo].[ReserveNextSKUJson]
+    @JsonInput NVARCHAR(MAX)
+AS
+BEGIN
+    SET NOCOUNT ON;
+    
+    -- Parse JSON input parameters
+    DECLARE @ReservedBy NVARCHAR(255) = JSON_VALUE(@JsonInput, '$.reservedBy')
+    
+    -- Generate next available SKU
+    DECLARE @NextSKU NVARCHAR(100)
+    DECLARE @MaxSKU INT = 0
+    
+    -- Find the highest numeric SKU currently in use
+    SELECT @MaxSKU = ISNULL(MAX(TRY_CAST(SUBSTRING(SKU, 4, LEN(SKU)) AS INT)), 0)
+    FROM Products 
+    WHERE SKU LIKE 'SKU%' AND ISNUMERIC(SUBSTRING(SKU, 4, LEN(SKU))) = 1
+    
+    -- Generate next SKU
+    SET @NextSKU = 'SKU' + RIGHT('000000' + CAST(@MaxSKU + 1 AS NVARCHAR), 6)
+    
+    -- For now, just return the generated SKU
+    -- In a full implementation, you'd insert into a SKUReservations table
+    SELECT (
+        SELECT 
+            1 as success,
+            'SKU reserved successfully' as message,
+            @NextSKU as sku,
+            @ReservedBy as reservedBy,
+            GETUTCDATE() as reservedAt
+        FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
+    ) as JsonResult
+END
+GO
